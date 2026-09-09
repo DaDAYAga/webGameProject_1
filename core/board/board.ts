@@ -47,13 +47,26 @@ export function createEmptyBoard(): Board {
 }
 
 /**
- * 開場棋盤：王 (0,0) 周圍距離 1 的 6 格鋪 plain_starter（不老化）。
- * 為什麼：擋開場移動（不擋遠程傷害，見 design-amendments 2026-09-09b）；與之後會老化的 plain 分開。
+ * 開場棋盤：王 (0,0) 周圍距離 1 的 6 格鋪開場牆（不老化）。
+ * 預設：已破碎（plain_broken + noAge）— 一擊可拆，拆掉傷王。
+ * 難度選項 intactStarterWalls：開場為完整 plain_starter（需先破碎再拆）。
+ * 擋移動；不擋遠程傷害（見 design-amendments）。
  */
-export function createOpeningBoard(): Board {
+export type OpeningBoardOptions = {
+  /** true = 開場牆完整（較難）；預設 false = 開場已破碎 */
+  intactStarterWalls?: boolean;
+};
+
+export function createOpeningBoard(opts: OpeningBoardOptions = {}): Board {
+  const intact = opts.intactStarterWalls === true;
   const tiles = new Map<string, Tile>();
   for (const h of neighbors(BOSS_HEX)) {
-    tiles.set(hexKey(h), makeTile('plain_starter'));
+    tiles.set(
+      hexKey(h),
+      intact
+        ? makeTile('plain_starter')
+        : makeTile('plain_broken', { noAge: true, aged: false }),
+    );
   }
   return { tiles };
 }
@@ -154,7 +167,6 @@ export function destroyTile(board: Board, hex: Axial): TerrainHitResult {
  * - 王格 (0,0)：否
  * - 空格：是
  * - 有地形：依 kindAllowsStand（curse 可自願踩；牆／punish／silence 預設否）
- * 踩 curse 後格清空請呼叫 absorbCurseAt（上身由上層處理）。
  */
 export function canStandAt(board: Board, hex: Axial): boolean {
   if (equals(hex, BOSS_HEX)) return false;

@@ -4,6 +4,7 @@
  */
 
 export type { TerrainKind, Tile, Board, TerrainHitResult } from './types.js';
+export type { OpeningBoardOptions } from './board.js';
 
 export {
   kindCountsForEnclosure,
