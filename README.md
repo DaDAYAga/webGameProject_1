@@ -84,6 +84,10 @@
 
 不含牌庫 UI、React。
 
+### ui/（薄手牌 demo 完成）
+
+Vite + React + TS：槍手／法師硬編碼手牌；**射擊**→`resolveGunnerShot`、**魔法箭**→`resolveMagicArrow`；其餘 toast「尚未串結算」。core 仍純 TS、無 React import。
+
 ## 如何跑測試
 
 安裝依賴後執行：
@@ -94,6 +98,19 @@ npm test
 npx vitest run
 ```
 
+## 薄手牌 UI（完成）
+
+`ui/` 為 Vite + React + TypeScript 薄殼：顯示硬編碼手牌、點牌呼叫 core 結算、事件日誌。
+不含牌庫組建、AI、六角 Canvas。
+
+```bash
+npm install
+npm run dev    # Vite，預設 http://localhost:5173
+npm run build  # 輸出 dist-ui/
+```
+
+學習入口：先開 `ui/src/App.tsx`（點牌 → `resolveGunnerShot` / `resolveMagicArrow`）。
+
 ## 下一步
 
-**React 薄手牌 UI**（handoff §12 step 9）。不要一次做完整牌庫／AI。
+**balance 控制台**或**六角 Canvas 棋盤**（handoff 後續）。不要一次做完整牌庫／AI／對局 loop。
