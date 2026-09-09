@@ -15,6 +15,7 @@ import {
   kindAllowsPush,
   placeTerrain,
   pushTerrain,
+  absorbCurseAt,
 } from './index.js';
 
 const O: Axial = { q: 0, r: 0 };
@@ -181,5 +182,24 @@ describe('destroyTile direct — 銷毀旗標', () => {
     const r = destroyTile(board, { q: 1, r: 0 });
     expect(r.destroyed).toBe(true);
     expect(r.damagesBoss).toBe(false);
+  });
+});
+
+describe('absorbCurseAt — 踩詛咒後格消失', () => {
+  it('clears curse tile after voluntary step', () => {
+    let board = createEmptyBoard();
+    const hex: Axial = { q: 2, r: -1 };
+    board = placeTerrain(board, hex, 'curse');
+    expect(canStandAt(board, hex)).toBe(true);
+    const next = absorbCurseAt(board, hex);
+    expect(next).not.toBeNull();
+    expect(getTile(next!, hex)).toBeUndefined();
+    expect(canStandAt(next!, hex)).toBe(true);
+  });
+
+  it('returns null when hex is not curse', () => {
+    const board = createOpeningBoard();
+    expect(absorbCurseAt(board, { q: 1, r: 0 })).toBeNull();
+    expect(absorbCurseAt(createEmptyBoard(), { q: 1, r: 0 })).toBeNull();
   });
 });

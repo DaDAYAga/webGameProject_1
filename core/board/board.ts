@@ -48,7 +48,7 @@ export function createEmptyBoard(): Board {
 
 /**
  * 開場棋盤：王 (0,0) 周圍距離 1 的 6 格鋪 plain_starter（不老化）。
- * 為什麼：擋開場移動與射界；與之後會老化的 plain 分開。
+ * 為什麼：擋開場移動（不擋遠程傷害，見 design-amendments 2026-09-09b）；與之後會老化的 plain 分開。
  */
 export function createOpeningBoard(): Board {
   const tiles = new Map<string, Tile>();
@@ -154,6 +154,7 @@ export function destroyTile(board: Board, hex: Axial): TerrainHitResult {
  * - 王格 (0,0)：否
  * - 空格：是
  * - 有地形：依 kindAllowsStand（curse 可自願踩；牆／punish／silence 預設否）
+ * 踩 curse 後格清空請呼叫 absorbCurseAt（上身由上層處理）。
  */
 export function canStandAt(board: Board, hex: Axial): boolean {
   if (equals(hex, BOSS_HEX)) return false;
@@ -193,4 +194,15 @@ export function pushTerrain(board: Board, from: Axial, to: Axial): Board | null 
   let next = setTile(board, from, undefined);
   next = setTile(next, to, { ...tile });
   return next;
+}
+
+/**
+ * 自願踩上詛咒格：格上 curse 消失（清空）。
+ * 為什麼：定案「踩詛咒之後，詛咒（格）會消失」；角色上身層數由 turn／combat 上層加。
+ * 非 curse 或空格 → 回 null。
+ */
+export function absorbCurseAt(board: Board, hex: Axial): Board | null {
+  const tile = getTile(board, hex);
+  if (!tile || tile.kind !== 'curse') return null;
+  return setTile(board, hex, undefined);
 }

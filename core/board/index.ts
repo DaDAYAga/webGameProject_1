@@ -29,4 +29,5 @@ export {
   canPushOnto,
   canPushFrom,
   pushTerrain,
+  absorbCurseAt,
 } from './board.js';
