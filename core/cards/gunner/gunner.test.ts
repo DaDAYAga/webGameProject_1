@@ -341,23 +341,22 @@ describe('Power UP!! resolvePowerUp', () => {
 });
 
 describe('來吧! 大鬧一場! resolveBigShow', () => {
-  it('happy：不抽牌、免費氣瓶、白送臨時射擊不耗卡、忽略距離罰', () => {
+  it('happy：不抽牌、免費氣瓶、授予 mayPlayShot＋ignoreRange、不自動射擊', () => {
     const r = resolveBigShow({
       hasMovedThisTurn: false,
       ammo: EMPTY_AMMO_SLOT,
-      attacker: { q: 2, r: 0 },
     });
     expect(r.ok).toBe(true);
-    expect(r.tempShotGranted).toBe(true);
-    expect(r.ammoBeforeShot).toEqual({
+    expect(r.mayPlayShot).toBe(true);
+    expect(r.ignoreRangePenaltyForShot).toBe(true);
+    expect(r.ammo).toEqual({
       damageBonus: BIG_SHOW_FREE_DAMAGE,
       drawBonus: BIG_SHOW_FREE_DRAW,
     });
-    // 空槽 + 免費 → {1,1} → 基礎1+1=2 傷、抽 1；射擊後槽清空
-    expect(r.bossDamage).toBe(2);
-    expect(r.drawFromAmmo).toBe(1);
-    expect(r.ammo).toEqual(EMPTY_AMMO_SLOT);
-    expect(r.events).toContainEqual({ type: 'TempShotPlayed' });
+    expect(r.events).toContainEqual({
+      type: 'MayPlayShot',
+      afterBigShow: true,
+    });
     expect(r.events).toContainEqual({
       type: 'AmmoSlotLoaded',
       damageBonus: 1,
@@ -370,11 +369,12 @@ describe('來吧! 大鬧一場! resolveBigShow', () => {
       ammo: { damageBonus: 1, drawBonus: 1 },
     });
     expect(r.events.some((e) => e.type === 'CardsDrawn')).toBe(false);
-    expect(r.events.some((e) => e.type === 'MayPlayShot')).toBe(false);
+    expect(r.events.some((e) => e.type === 'TempShotPlayed')).toBe(false);
     expect(r.events.some((e) => e.type === 'ImmediatePlayAllowed')).toBe(false);
+    expect(r.events.some((e) => e.type === 'BossDamaged')).toBe(false);
   });
 
-  it('happy：已滿槽 {1,1} → 免費 {2,2} → 白送射擊 3 傷 + 抽 2', () => {
+  it('happy：已滿槽 {1,1} → 免費 {2,2}；後續手上射擊 3 傷 + 抽 2', () => {
     const full: AmmoSlotState = { damageBonus: 1, drawBonus: 1 };
     expect(ammoSlotTotal(full)).toBe(AMMO_SLOT_MAX_TOTAL);
     expect(addAmmo(full, 1, 0)).toBeNull();
@@ -382,39 +382,64 @@ describe('來吧! 大鬧一場! resolveBigShow', () => {
     const r = resolveBigShow({
       hasMovedThisTurn: false,
       ammo: full,
-      attacker: { q: 2, r: 0 },
     });
     expect(r.ok).toBe(true);
-    expect(r.tempShotGranted).toBe(true);
-    expect(r.ammoBeforeShot).toEqual({ damageBonus: 2, drawBonus: 2 });
-    expect(r.bossDamage).toBe(3);
-    expect(r.drawFromAmmo).toBe(2);
-    expect(r.ammo).toEqual(EMPTY_AMMO_SLOT);
-    expect(r.events).toContainEqual({ type: 'TempShotPlayed' });
+    expect(r.mayPlayShot).toBe(true);
+    expect(r.ignoreRangePenaltyForShot).toBe(true);
+    expect(r.ammo).toEqual({ damageBonus: 2, drawBonus: 2 });
+    expect(r.events.some((e) => e.type === 'TempShotPlayed')).toBe(false);
+
+    // 峰值：{1,1}+free→{2,2} → 手上射擊 3 傷 + 抽 2（耗卡由上層）
+    const shot = resolveGunnerShot({
+      attacker: { q: 2, r: 0 },
+      ammo: r.ammo,
+      ignoreRangePenalty: r.ignoreRangePenaltyForShot,
+    });
+    expect(shot.ok).toBe(true);
+    expect(shot.bossDamage).toBe(3);
+    expect(shot.drawFromAmmo).toBe(2);
+    expect(shot.ammo).toEqual(EMPTY_AMMO_SLOT);
   });
 
-  it('fail：出牌前已移動（不裝填、不白送射擊）', () => {
+  it('峰值側：{2,0}+free→4傷+抽1；{0,2}+free→2傷+抽3', () => {
+    const rDmg = resolveBigShow({
+      hasMovedThisTurn: false,
+      ammo: { damageBonus: 2, drawBonus: 0 },
+    });
+    expect(rDmg.ammo).toEqual({ damageBonus: 3, drawBonus: 1 });
+    const shotDmg = resolveGunnerShot({
+      attacker: { q: 2, r: 0 },
+      ammo: rDmg.ammo,
+      ignoreRangePenalty: rDmg.ignoreRangePenaltyForShot,
+    });
+    expect(shotDmg.bossDamage).toBe(4);
+    expect(shotDmg.drawFromAmmo).toBe(1);
+
+    const rDraw = resolveBigShow({
+      hasMovedThisTurn: false,
+      ammo: { damageBonus: 0, drawBonus: 2 },
+    });
+    expect(rDraw.ammo).toEqual({ damageBonus: 1, drawBonus: 3 });
+    const shotDraw = resolveGunnerShot({
+      attacker: { q: 2, r: 0 },
+      ammo: rDraw.ammo,
+      ignoreRangePenalty: rDraw.ignoreRangePenaltyForShot,
+    });
+    expect(shotDraw.bossDamage).toBe(2);
+    expect(shotDraw.drawFromAmmo).toBe(3);
+  });
+
+  it('fail：出牌前已移動（不裝填、不授旗）', () => {
     const ammo: AmmoSlotState = { damageBonus: 1, drawBonus: 0 };
     const r = resolveBigShow({
       hasMovedThisTurn: true,
       ammo,
-      attacker: { q: 2, r: 0 },
     });
     expect(r.ok).toBe(false);
     expect(r.reason).toBe('already_moved');
-    expect(r.tempShotGranted).toBe(false);
+    expect(r.mayPlayShot).toBe(false);
+    expect(r.ignoreRangePenaltyForShot).toBe(false);
     expect(r.ammo).toEqual(ammo);
-    expect(r.bossDamage).toBeUndefined();
-  });
-
-  it('fail：缺 attacker', () => {
-    const r = resolveBigShow({
-      hasMovedThisTurn: false,
-      ammo: EMPTY_AMMO_SLOT,
-    });
-    expect(r.ok).toBe(false);
-    expect(r.reason).toBe('temp_shot_missing_attacker');
-    expect(r.tempShotGranted).toBe(false);
   });
 
   it('addAmmoUnchecked 可超 cap；一般 addAmmo 不可', () => {

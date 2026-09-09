@@ -126,7 +126,7 @@ export type PowerUpResult = {
 };
 
 /**
- * 來吧! 大鬧一場! 結算結果（2026-09-09g：不抽牌；白送臨時射擊不耗卡）。
+ * 來吧! 大鬧一場! 結算結果（2026-09-09g：不抽牌；授予可出手上 1 射擊＋ignoreRangePenalty）。
  */
 export type BigShowResult = {
   ok: boolean;
@@ -134,19 +134,16 @@ export type BigShowResult = {
   events: GunnerCardEvent[];
   counted: true;
   /**
-   * 成功時為 true：本大招內已結算一發白送臨時射擊（同 Power UP temp_shot；
-   * 不消耗手上射擊牌；固定 ignoreRangePenalty）。
+   * 成功時為 true：之後可打 1 張手上射擊（耗該卡；非白送 TempShot）。
    */
-  tempShotGranted: boolean;
-  /** 白送射擊對王有效傷（成功且有結算時）。 */
-  bossDamage?: number;
-  inSweetZone?: boolean;
-  /** 該白送射擊從裝填抽出的張數（上層應抽）。 */
-  drawFromAmmo?: number;
-  /** 結算後裝填槽（白送射擊後必清空；失敗則為輸入原樣）。 */
+  mayPlayShot: boolean;
+  /**
+   * 成功時為 true：該後續射擊應忽略甜區外 −1。
+   * 上層呼叫 resolveGunnerShot 時傳 ignoreRangePenalty: true。
+   */
+  ignoreRangePenaltyForShot: boolean;
+  /** 成功時含免費 +傷／+抽（可超 AMMO_SLOT_MAX_TOTAL）；失敗則原樣。 */
   ammo: AmmoSlotState;
-  /** 成功時：免費裝填後、射擊前的槽快照（可超 cap）。 */
-  ammoBeforeShot?: AmmoSlotState;
 };
 
 export type { CardDefinition, CardKindTag };

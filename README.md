@@ -72,7 +72,7 @@
 - **射擊**／**氣瓶**／裝填槽（合計 ≤2，射擊清槽）
 - **大亂流** `resolveTurbulence`：棄最多 2 張氣瓶牌 → 走棄牌數+1；不穿破碎
 - **Power UP!!** `resolvePowerUp`：須已移動；檢 2 射擊或臨時射擊（清槽、不可立刻氣瓶）
-- **來吧! 大鬧一場!** `resolveBigShow`：未移動；抽 3；非射擊可立刻用（事件 hook）；再可打 1 射擊
+- **來吧! 大鬧一場!** `resolveBigShow`：未移動；不抽牌；免費超 cap 氣瓶；授予 mayPlayShot＋ignoreRange（出手上 1 射擊耗卡）
 
 ### core/cards/mage（完成）
 

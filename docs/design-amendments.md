@@ -156,21 +156,22 @@
 
 ## 2026-09-09g — 來吧! 大鬧一場! 強化（鎖定）
 
-> 來源：人類定案「來吧! 大鬧一場! 強化」＋後續訂正（不抽牌；白送臨時射擊）。  
+> 來源：人類定案「來吧! 大鬧一場! 強化」＋後續訂正（不抽牌；射擊須耗手上射擊牌）。  
 > **保留**：×1；出牌前不可移動（`hasMovedThisTurn` 失敗）；計次；受沉默。  
-> **覆寫**：舊「抽 3／非射擊可立刻用／`mayPlayShot` 出手上射擊」一律作廢。
+> **覆寫**：舊「抽 3／非射擊可立刻用」作廢；**覆寫**白送臨時射擊／`TempShotPlayed` 自動結算（太強）。  
+> 更新標記：`2026-09-09g`（手牌射擊耗卡）。
 
 ### 定案 — 結算流程
 
-1. `hasMovedThisTurn` → 失敗（裝填不變、不射擊）。
+1. `hasMovedThisTurn` → 失敗（裝填不變、不授旗）。
 2. **不抽牌**（無 `BIG_SHOW_DRAW`／`CardsDrawn`／`immediatePlayEligible`）。
-3. **免費氣瓶**：`+BIG_SHOW_FREE_DAMAGE`（頑皮）＋`+BIG_SHOW_FREE_DRAW`（胡鬧）；**不棄射擊**；**可超** `AMMO_SLOT_MAX_TOTAL`（走 `addAmmoUnchecked`）。一般氣瓶 cap=2 不變。
-4. **白送臨時射擊**（同 Power UP `temp_shot`）：立刻 `resolveGunnerShot`，**不消耗手上射擊牌**；固定 `ignoreRangePenalty: true`；套用並清空裝填。事件含 `TempShotPlayed`（勿用「可出手上射擊」的 `MayPlayShot`）。
+3. **免費氣瓶**：`+BIG_SHOW_FREE_DAMAGE`（頑皮）＋`+BIG_SHOW_FREE_DRAW`（胡鬧）；**不棄射擊**；**可超** `AMMO_SLOT_MAX_TOTAL`（走 `addAmmoUnchecked`）。一般氣瓶 cap=2 不變。保留 `AmmoSlotLoaded`／`BigShowAmmoGranted` 事件。
+4. **授予** `mayPlayShot: true` ＋ `ignoreRangePenalty: true`（結果欄 `ignoreRangePenaltyForShot`；事件 `MayPlayShot`）：玩家可打 **1 張手上射擊**（**消耗該卡**）。**禁止**在 `resolveBigShow` 內立刻 `resolveGunnerShot`／發 `TempShotPlayed`。
 5. 計次；受沉默。
 
-### 峰值示例（基礎射擊傷 1；皆為該白送射擊）
+### 峰值示例（基礎射擊傷 1；皆為後續**手上射擊**結算時）
 
-| 大招前槽 | 免費後（射擊前） | 白送射擊結果 |
+| 大招前槽 | 免費後（射擊前） | 手上射擊結果 |
 |---|---|---|
 | 空 `{0,0}` | `{1,1}` | 2 傷 + 抽 1 |
 | 滿 `{1,1}` | `{2,2}` | **3 傷 + 抽 2**（常見高潮） |
@@ -179,9 +180,10 @@
 
 **峰值讀法（鎖定）**
 
-- 常見高潮：`{1,1}` → `{2,2}` → **3 傷 + 抽 2**。
+- 常見高潮：`{1,1}` → `{2,2}` → **3 傷 + 抽 2**（須耗 1 張手上射擊）。
 - 單邊峰值互斥：4 傷+抽 1 **或** 2 傷+抽 3；勿混成同一包。
 - **禁止**寫成「三傷＋三抽」最大組合；大招本身**不再另抽牌**，射擊抽僅來自 `drawBonus`。
+- 無手上射擊則無法兌現峰值（大招仍成功授旗／裝填）。
 
 ### 常數
 
@@ -193,6 +195,6 @@
 
 - 不要拿掉「出牌前不可移動」
 - 不要讓一般氣瓶也忽略 cap
-- 不要改回「抽 3」或「出手上射擊牌」
+- 不要改回「抽 3」或白送不耗卡臨時射擊
 - 不要把 ignoreRangePenalty 做成永久被動
 - 不要改法師
