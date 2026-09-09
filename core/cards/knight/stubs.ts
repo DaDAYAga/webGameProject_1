@@ -15,9 +15,9 @@ export const KNIGHT_CARD_DEFS: Record<KnightCardId, CardDefinition> = {
     silenced: true,
     kind: ['attack'],
   },
-  shield_charge: {
-    id: 'shield_charge',
-    name: '盾牌衝鋒',
+  heroic_charge: {
+    id: 'heroic_charge',
+    name: '英勇衝鋒',
     countsTowardAction: true,
     silenced: true,
     kind: ['attack', 'movement'],
@@ -29,11 +29,11 @@ export const KNIGHT_CARD_DEFS: Record<KnightCardId, CardDefinition> = {
     silenced: true,
     kind: ['utility'],
   },
-  guard: {
-    id: 'guard',
-    name: '護身',
-    countsTowardAction: true,
-    silenced: true,
+  taunt: {
+    id: 'taunt',
+    name: '嘲諷',
+    countsTowardAction: false,
+    silenced: false,
     kind: ['utility'],
   },
   devotion: {

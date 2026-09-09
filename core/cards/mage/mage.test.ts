@@ -10,6 +10,7 @@ import { DEFAULT_MAP_RADIUS, isSealed } from '../../enclosure/index.js';
 import {
   AMPLIFY_ARROW_BONUS,
   BARRIER_NEXT_TURN_DRAW_DELTA,
+  BARRIER_PRIORITY,
   BARRIER_RETARGET_MAX_DIST,
   FOCUS_DRAW,
   FOCUS_DRAW_AMPLIFIED,
@@ -397,6 +398,8 @@ describe('磁力屏障 resolveBarrier', () => {
     expect(r.counted).toBe(true);
     expect(r.aura?.targetActorId).toBe('mage');
     expect(r.aura?.nextTurnDrawDelta).toBe(BARRIER_NEXT_TURN_DRAW_DELTA);
+    expect(r.aura?.priority).toBe(BARRIER_PRIORITY);
+    expect(r.aura?.priority).toBe(10);
     expect(r.aura?.protectedHexes).toHaveLength(6);
     expect(barrierBlocksPlacement(r.aura, { q: 3, r: 0 })).toBe(true);
     expect(barrierBlocksPlacement(r.aura, { q: 5, r: 0 })).toBe(false);

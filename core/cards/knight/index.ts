@@ -1,6 +1,6 @@
 /**
  * 騎士 PVE 卡牌（core/cards/knight）。
- * 已實作：攻擊、衝鋒、堅定信仰、護身、奉獻、不死存在。
+ * 已實作：攻擊、英勇衝鋒、堅定信仰、嘲諷、奉獻、不死存在。
  */
 
 export type {
@@ -9,9 +9,10 @@ export type {
   KnightCardEvent,
   KnightAttackResult,
   CurseStopMode,
-  ShieldChargeResult,
+  HeroicChargeResult,
   FaithResult,
-  GuardResult,
+  BossPlaceRestriction,
+  TauntResult,
   DevotionResult,
   UndyingResult,
 } from './types.js';
@@ -21,6 +22,10 @@ export {
   FAITH_CURSE_CLEAR,
   DEVOTION_ABSORB,
   UNDYING_LANDING_RADIUS,
+  HEROIC_CHARGE_BOSS_HIT_DAMAGE,
+  HEROIC_CHARGE_WALL_DAMAGE_CAP,
+  HEROIC_CHARGE_BOSS_DRAWS,
+  TAUNT_PRIORITY,
 } from './constants.js';
 
 export {
@@ -31,10 +36,10 @@ export {
 } from './attack.js';
 
 export {
-  SHIELD_CHARGE_MAX_STEPS,
-  resolveShieldCharge,
-  type ResolveShieldChargeInput,
-} from './shieldCharge.js';
+  resolveHeroicCharge,
+  type ResolveHeroicChargeInput,
+  type HeroicChargeUnit,
+} from './heroicCharge.js';
 
 export {
   resolveFaith,
@@ -42,13 +47,11 @@ export {
 } from './faith.js';
 
 export {
-  guardSightBlockedByTile,
-  straightLineDirection,
-  hexesBetweenOnLine,
-  hasGuardLineOfSight,
-  resolveGuard,
-  type ResolveGuardInput,
-} from './guard.js';
+  TAUNT_RING_DISTANCE,
+  tauntBlocksPlacement,
+  resolveTaunt,
+  type ResolveTauntInput,
+} from './taunt.js';
 
 export {
   resolveDevotion,

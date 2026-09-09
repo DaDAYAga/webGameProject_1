@@ -84,3 +84,70 @@
 
 **Power UP!!** 本身**沒有**「本回合須已移動」限制。  
 覆寫舊交接／實作中的 `hasMovedThisTurn` 門檻（大招「來吧!」仍為出牌前不可移動）。
+
+
+---
+
+## 2026-09-09f — 英勇衝鋒與嘲諷（鎖定）
+
+> 來源：人類定案「騎士鎖牌重設」。  
+> **覆寫／取代**舊「盾牌衝鋒」「護身」牌面與結算；其餘騎士牌（攻擊／堅定信仰／奉獻／不死存在）不變。
+
+### 定案 — 換牌
+
+| 移除 | 新增 | 張數 |
+|---|---|---|
+| 護身 `guard` | 嘲諷 `taunt` | ×2 |
+| 盾牌衝鋒 `shield_charge` | 英勇衝鋒 `heroic_charge` | ×2 |
+
+- **英勇衝鋒**：計次 `countsTowardAction:true`；受沉默 `silenced:true`（同舊衝鋒）。
+- **嘲諷**：不計次 `countsTowardAction:false`；**不受沉默** `silenced:false`；無傷害。
+
+### 定案 — 英勇衝鋒 `resolveHeroicCharge`
+
+沿單一軸向直線前進，直到地圖邊界或硬停：
+
+1. **地圖邊界**（`MapBounds`／`DEFAULT_MAP_RADIUS` 或呼叫端 bounds）：不可踏出圖外；停在最後一格圖內。
+2. **空格**：繼續前進。
+3. **詛咒 `curse`**：基準＝穿過並 `absorbCurseAt`（清格）；難度選項可改截停。預設 absorb。
+4. **未老化破碎 `plain_broken`（aged!==true）**：穿過並清格；**不傷王**；可連續穿越。
+5. **老化牆**（aged 的 plain／plain_broken／starter）：穿過並銷毀；每牆王傷 +1，但**牆傷加總上限 2**；可連續穿越多面老化牆直到邊界或硬停。
+6. **完整未老化牆**（plain／plain_starter 且未 aged）：停在**前一格**；對牆 `applyTerrainHit` 一次（破碎）；`forceEndTurn`。
+7. **punish／silence**：停在前一格；不銷毀；`forceEndTurn`。
+8. **王格**：不進入；對王造成 **2** 傷；整次衝鋒**只抽 1 張王牌**（若同時穿牆傷王，仍只抽 1）；牆傷與王本體傷可加總（例：牆 2 + 王 2 = 4）；`forceEndTurn`。
+9. **撞其他單位**（可選 `units`，不含自己）：停在互動前；落到呼叫端指定的 `landingHex`（須為該單位鄰 1 且 `canStandAt`）；`forceEndTurn`。
+
+**抽牌／事件**：若有任一牆傷或王本體命中 → 單次抽牌旗標（`HEROIC_CHARGE_BOSS_DRAWS=1`）；可發一次總傷 `BossDamaged`／`WallPierce` + 抽牌事件。
+
+**結束回合**：英勇衝鋒結算後**一律** `forceEndTurn:true`（大移動）。
+
+常數：
+
+- `HEROIC_CHARGE_BOSS_HIT_DAMAGE = 2`
+- `HEROIC_CHARGE_WALL_DAMAGE_CAP = 2`
+- `HEROIC_CHARGE_BOSS_DRAWS = 1`
+
+### 定案 — 嘲諷 `resolveTaunt`
+
+- 輸入：`isOthersTurn:boolean`（必須為 true）、`knightHex`、可選既有屏障。
+- 非他人回合 → 失敗。
+- 成功：`bossPlaceRestriction: { type:'taunt', center: knightHex, ringDistance:1 }`，`tauntPriority: 100`。
+- 不計次、不受沉默、`bossDamage:0`。
+
+### 定案 — 與磁力屏障優先級
+
+- `TAUNT_PRIORITY = 100`
+- `BARRIER_PRIORITY = 10`
+- **嘲諷覆蓋屏障**：同格／衝突時以優先級較高者為準（嘲諷勝）。
+
+### 給 bot（禁改）
+
+- 不要把舊護身／盾牌衝鋒加回牌表
+- 不要拿掉牆傷 cap 2 或王命中 2
+- 不要讓嘲諷受沉默或計次
+- 不要讓英勇衝鋒預設遇咒截停（預設 absorb）
+
+### 未定（玩起來再調）
+
+- 遇咒難度選項 `stop` 的正式開關位置
+- 穿未老化破碎是否一定清格（本鎖定採清格）

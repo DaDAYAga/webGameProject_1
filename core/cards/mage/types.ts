@@ -140,6 +140,11 @@ export type BarrierAura = {
   expires: 'end_of_round';
   nextTurnDrawDelta: number;
   mageId: string;
+  /**
+   * 鋪牆限制優先級（BARRIER_PRIORITY=10）。
+   * 低於騎士嘲諷（100）；衝突時嘲諷覆蓋。
+   */
+  priority: number;
 };
 
 /** 磁力屏障結算結果。 */

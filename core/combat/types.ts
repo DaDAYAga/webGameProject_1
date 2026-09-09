@@ -35,7 +35,7 @@ export type CombatEvent =
   | {
       type: 'BossDamaged';
       amount: number;
-      source: 'melee' | 'ranged' | 'aged_wall_destroy';
+      source: 'melee' | 'ranged' | 'aged_wall_destroy' | 'heroic_charge';
       effective: boolean;
     };
 

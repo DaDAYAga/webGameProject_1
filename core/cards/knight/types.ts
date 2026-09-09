@@ -13,9 +13,9 @@ export type { CardDefinition, CardKindTag };
 /** 騎士牌種 id。 */
 export type KnightCardId =
   | 'attack'
-  | 'shield_charge'
+  | 'heroic_charge'
   | 'faith'
-  | 'guard'
+  | 'taunt'
   | 'devotion'
   | 'undying';
 
@@ -26,7 +26,7 @@ export type KnightCardId =
 export type KnightCardInstance = {
   instanceId: string;
   cardId: KnightCardId;
-  /** 計次牌（攻擊／衝鋒／信仰／護身）；奉獻／不死為 false。 */
+  /** 計次牌（攻擊／英勇衝鋒／信仰）；嘲諷／奉獻／不死為 false。 */
   counted: boolean;
 };
 
@@ -37,7 +37,9 @@ export type KnightCardEvent =
   | { type: 'ActorMoved'; from: Axial; to: Axial }
   | { type: 'CurseAbsorbed'; hex: Axial }
   | { type: 'CurseStopped'; hex: Axial }
-  | { type: 'ChargeBlocked'; hex: Axial; reason: 'punish' | 'boss' | 'silence' }
+  | { type: 'ChargeBlocked'; hex: Axial; reason: 'punish' | 'boss' | 'silence' | 'unit' | 'map_edge' }
+  | { type: 'WallPierce'; hex: Axial; bossDamageApplied: number }
+  | { type: 'DrawRequested'; count: number; reason?: string }
   | { type: 'CurseClearedSelf'; amount: number }
   | {
       type: 'CurseAbsorbedFromAlly';
@@ -48,7 +50,13 @@ export type KnightCardEvent =
   | { type: 'UndyingExtracted'; reason: string }
   | { type: 'ActorRevived'; hex: Axial }
   | { type: 'UndyingClearedBroken'; hex: Axial }
-  | { type: 'UndyingCrackedPlain'; hex: Axial };
+  | { type: 'UndyingCrackedPlain'; hex: Axial }
+  | {
+      type: 'TauntApplied';
+      center: Axial;
+      ringDistance: number;
+      priority: number;
+    };
 
 /** 攻擊結算結果。 */
 export type KnightAttackResult = {
@@ -63,14 +71,14 @@ export type KnightAttackResult = {
 };
 
 /**
- * 衝鋒遇詛咒行為（UNRESOLVED）。
- * - stop：停在詛咒前一格，不吸收（保守預設）
- * - absorbMax1：進入並清掉最多 1 格詛咒，可繼續前進
+ * 英勇衝鋒遇詛咒行為。
+ * - absorb：穿過並清格（預設；design-amendments 2026-09-09f）
+ * - stop：停在詛咒前一格，不吸收（難度選項）
  */
-export type CurseStopMode = 'stop' | 'absorbMax1';
+export type CurseStopMode = 'absorb' | 'stop';
 
-/** 盾牌衝鋒結算結果。 */
-export type ShieldChargeResult = {
+/** 英勇衝鋒結算結果。 */
+export type HeroicChargeResult = {
   ok: boolean;
   reason?: string;
   board: Board;
@@ -78,9 +86,16 @@ export type ShieldChargeResult = {
   actorPosition: Axial;
   events: KnightCardEvent[];
   counted: true;
-  /** 是否強制結束回合（撞牆／punish／王格等）。 */
-  forceEndTurn: boolean;
+  /** 英勇衝鋒結算後一律結束回合。 */
+  forceEndTurn: true;
+  /** 牆傷（已 cap）＋王本體命中傷加總。 */
   bossDamage: number;
+  /** 本次牆傷（已套 cap）。 */
+  wallDamage: number;
+  /** 是否命中王格。 */
+  hitBoss: boolean;
+  /** 是否觸發王抽牌（牆傷或王命中）。 */
+  bossDraw: boolean;
   curseStop: CurseStopMode;
 };
 
@@ -96,14 +111,27 @@ export type FaithResult = {
   cleared: number;
 };
 
-/** 護身結算結果。 */
-export type GuardResult = {
+/** 王鋪牆限制（嘲諷等）。 */
+export type BossPlaceRestriction = {
+  type: 'taunt';
+  center: Axial;
+  /** 禁鋪距離（嘲諷＝鄰 1）。 */
+  ringDistance: number;
+};
+
+/** 嘲諷結算結果。 */
+export type TauntResult = {
   ok: boolean;
   reason?: string;
-  board: Board;
-  actorPosition: Axial;
   events: KnightCardEvent[];
-  counted: true;
+  counted: false;
+  /** 牌面不受沉默。 */
+  silenced: false;
+  bossDamage: 0;
+  bossPlaceRestriction?: BossPlaceRestriction;
+  tauntPriority: number;
+  /** 若呼叫端傳入既有屏障，嘲諷優先級較高而覆蓋。 */
+  overridesBarrier: boolean;
 };
 
 /** 奉獻結算結果。 */

@@ -6,21 +6,30 @@ import {
   getTile,
   placeTerrain,
 } from '../../board/index.js';
+import { DEFAULT_MAP_RADIUS } from '../../enclosure/index.js';
 import { AXIAL_DIRECTIONS, type Axial } from '../../hex/index.js';
+import { BARRIER_PRIORITY } from '../mage/constants.js';
 import {
   FAITH_CURSE_CLEAR,
+  HEROIC_CHARGE_BOSS_DRAWS,
+  HEROIC_CHARGE_BOSS_HIT_DAMAGE,
+  HEROIC_CHARGE_WALL_DAMAGE_CAP,
   KNIGHT_ATTACK_BOSS_DAMAGE,
+  KNIGHT_CARD_DEFS,
   KNIGHT_CURSE_DEATH_STACKS,
+  TAUNT_PRIORITY,
   makeKnightCard,
   resolveDevotion,
   resolveFaith,
-  resolveGuard,
+  resolveHeroicCharge,
   resolveKnightAttack,
-  resolveShieldCharge,
+  resolveTaunt,
   resolveUndying,
+  tauntBlocksPlacement,
 } from './index.js';
 
 const DIR_EQ = AXIAL_DIRECTIONS[0]!; // +q
+const BOUNDS = { radius: DEFAULT_MAP_RADIUS };
 
 describe('knight attack vs boss adjacent', () => {
   it('distance 1 → 2 damage, BossDamaged melee', () => {
@@ -127,134 +136,250 @@ describe('knight attack crack / destroy walls', () => {
   });
 });
 
-describe('shield charge into aged wall', () => {
-  it('pass through aged wall, destroy, boss 1, end turn, land on hex', () => {
+describe('英勇衝鋒 pierce aged walls', () => {
+  it('pierce two aged walls → damage 2 (cap), one draw', () => {
     let board = createEmptyBoard();
-    const start: Axial = { q: 3, r: 0 };
-    const wall: Axial = { q: 4, r: 0 };
-    board = placeTerrain(board, wall, 'plain_broken', { aged: true });
+    const start: Axial = { q: 1, r: 0 };
+    const w1: Axial = { q: 2, r: 0 };
+    const w2: Axial = { q: 3, r: 0 };
+    board = placeTerrain(board, w1, 'plain_broken', { aged: true });
+    board = placeTerrain(board, w2, 'plain_broken', { aged: true });
 
-    const r = resolveShieldCharge({
+    const r = resolveHeroicCharge({
       board,
       actorPosition: start,
       direction: DIR_EQ,
+      bounds: BOUNDS,
     });
     expect(r.ok).toBe(true);
     expect(r.forceEndTurn).toBe(true);
-    expect(r.bossDamage).toBe(1);
-    expect(r.actorPosition).toEqual(wall);
-    expect(getTile(r.board, wall)).toBeUndefined();
+    expect(r.wallDamage).toBe(HEROIC_CHARGE_WALL_DAMAGE_CAP);
+    expect(r.bossDamage).toBe(2);
+    expect(r.bossDraw).toBe(true);
+    expect(getTile(r.board, w1)).toBeUndefined();
+    expect(getTile(r.board, w2)).toBeUndefined();
     expect(r.events).toContainEqual({
       type: 'BossDamaged',
-      amount: 1,
+      amount: 2,
       source: 'aged_wall_destroy',
       effective: true,
     });
-    expect(r.events.some((e) => e.type === 'TurnForceEnded')).toBe(true);
+    const draws = r.events.filter((e) => e.type === 'DrawRequested');
+    expect(draws).toHaveLength(1);
+    expect(draws[0]).toMatchObject({
+      type: 'DrawRequested',
+      count: HEROIC_CHARGE_BOSS_DRAWS,
+    });
   });
 
-  it('opening default aged broken: pass through destroy + boss dmg + end turn', () => {
-    const board = createOpeningBoard();
-    // stand at (2,0), charge toward boss along -q into opening wall (1,0)
-    const start: Axial = { q: 2, r: 0 };
-    const wall: Axial = { q: 1, r: 0 };
+  it('pierce wall then hit boss → damage up to 4, one draw', () => {
+    let board = createEmptyBoard();
+    // start at (3,0): pierce (2,0) and (1,0) aged → wall 2, then boss hit +2 = 4
+    const start: Axial = { q: 3, r: 0 };
+    board = placeTerrain(board, { q: 2, r: 0 }, 'plain_broken', { aged: true });
+    board = placeTerrain(board, { q: 1, r: 0 }, 'plain_broken', { aged: true });
     const dir: Axial = { q: -1, r: 0 };
-    expect(getTile(board, wall)?.kind).toBe('plain_broken');
-    expect(getTile(board, wall)?.aged).toBe(true);
 
-    const r = resolveShieldCharge({
+    const r = resolveHeroicCharge({
       board,
       actorPosition: start,
       direction: dir,
+      bounds: BOUNDS,
     });
-    expect(r.forceEndTurn).toBe(true);
-    expect(r.bossDamage).toBe(1);
-    expect(r.actorPosition).toEqual(wall);
-    expect(getTile(r.board, wall)).toBeUndefined();
+    expect(r.ok).toBe(true);
+    expect(r.hitBoss).toBe(true);
+    expect(r.wallDamage).toBe(2);
+    expect(r.bossDamage).toBe(2 + HEROIC_CHARGE_BOSS_HIT_DAMAGE);
+    expect(r.bossDamage).toBe(4);
+    expect(r.actorPosition).toEqual({ q: 1, r: 0 });
+    expect(r.events).toContainEqual({
+      type: 'BossDamaged',
+      amount: HEROIC_CHARGE_BOSS_HIT_DAMAGE,
+      source: 'heroic_charge',
+      effective: true,
+    });
+    expect(r.events.filter((e) => e.type === 'DrawRequested')).toHaveLength(1);
+  });
+
+  it('wall damage caps at 2 even with three aged walls', () => {
+    let board = createEmptyBoard();
+    const start: Axial = { q: 0, r: 1 };
+    // charge +q along r=1: (1,1)(2,1)(3,1)
+    board = placeTerrain(board, { q: 1, r: 1 }, 'plain', { aged: true });
+    board = placeTerrain(board, { q: 2, r: 1 }, 'plain_broken', { aged: true });
+    board = placeTerrain(board, { q: 3, r: 1 }, 'plain_broken', { aged: true });
+    const r = resolveHeroicCharge({
+      board,
+      actorPosition: start,
+      direction: DIR_EQ,
+      bounds: BOUNDS,
+    });
+    expect(r.wallDamage).toBe(2);
+    expect(r.bossDamage).toBe(2);
+    expect(r.events.filter((e) => e.type === 'DrawRequested')).toHaveLength(1);
   });
 });
 
-describe('shield charge into fresh wall', () => {
-  it('stop on previous hex, crack wall, force end turn, no boss dmg', () => {
+describe('英勇衝鋒 intact wall / unit / empty', () => {
+  it('intact unaged wall → stop prev, crack, force end', () => {
     let board = createEmptyBoard();
     const start: Axial = { q: 3, r: 0 };
     const wall: Axial = { q: 4, r: 0 };
     board = placeTerrain(board, wall, 'plain', { aged: false });
 
-    const r = resolveShieldCharge({
+    const r = resolveHeroicCharge({
       board,
       actorPosition: start,
       direction: DIR_EQ,
+      bounds: BOUNDS,
     });
     expect(r.ok).toBe(true);
     expect(r.forceEndTurn).toBe(true);
     expect(r.bossDamage).toBe(0);
+    expect(r.bossDraw).toBe(false);
     expect(r.actorPosition).toEqual(start);
     expect(getTile(r.board, wall)?.kind).toBe('plain_broken');
     expect(r.events.some((e) => e.type === 'TurnForceEnded')).toBe(true);
   });
 
-  it('after 1 empty step then fresh wall: stop on empty, crack wall', () => {
+  it('after empty step then fresh wall: stop on empty, crack', () => {
     let board = createEmptyBoard();
     const start: Axial = { q: 2, r: 0 };
     const mid: Axial = { q: 3, r: 0 };
     const wall: Axial = { q: 4, r: 0 };
     board = placeTerrain(board, wall, 'plain', { aged: false });
 
-    const r = resolveShieldCharge({
+    const r = resolveHeroicCharge({
       board,
       actorPosition: start,
       direction: DIR_EQ,
+      bounds: BOUNDS,
     });
     expect(r.actorPosition).toEqual(mid);
     expect(getTile(r.board, wall)?.kind).toBe('plain_broken');
     expect(r.forceEndTurn).toBe(true);
-    expect(r.bossDamage).toBe(0);
   });
-});
 
-describe('shield charge into boss cell', () => {
-  it('cannot enter boss, stay put, force end turn, no destroy', () => {
+  it('hit unit → landingHex beside unit', () => {
     const board = createEmptyBoard();
-    const start: Axial = { q: 1, r: 0 };
-    const dir: Axial = { q: -1, r: 0 }; // toward (0,0)
-
-    const r = resolveShieldCharge({
-      board,
-      actorPosition: start,
-      direction: dir,
-    });
-    expect(r.actorPosition).toEqual(start);
-    expect(r.forceEndTurn).toBe(true);
-    expect(r.bossDamage).toBe(0);
-    expect(r.events).toContainEqual({
-      type: 'ChargeBlocked',
-      hex: BOSS_HEX,
-      reason: 'boss',
-    });
-  });
-});
-
-describe('shield charge empty path', () => {
-  it('moves up to 2 hexes without ending turn', () => {
-    const board = createEmptyBoard();
-    const start: Axial = { q: 3, r: 0 };
-    const r = resolveShieldCharge({
+    const start: Axial = { q: 2, r: 0 };
+    const unitHex: Axial = { q: 4, r: 0 };
+    const landing: Axial = { q: 4, r: -1 }; // neighbor of unit
+    const r = resolveHeroicCharge({
       board,
       actorPosition: start,
       direction: DIR_EQ,
+      bounds: BOUNDS,
+      units: [{ id: 'ally', hex: unitHex }],
+      landingHex: landing,
     });
-    expect(r.actorPosition).toEqual({ q: 5, r: 0 });
-    expect(r.forceEndTurn).toBe(false);
+    expect(r.ok).toBe(true);
+    expect(r.actorPosition).toEqual(landing);
+    expect(r.forceEndTurn).toBe(true);
+    expect(r.events).toContainEqual({
+      type: 'ChargeBlocked',
+      hex: unitHex,
+      reason: 'unit',
+    });
+  });
+
+  it('unaged broken: pierce clear no boss dmg; always end turn', () => {
+    let board = createEmptyBoard();
+    const start: Axial = { q: 2, r: 0 };
+    const broken: Axial = { q: 3, r: 0 };
+    board = placeTerrain(board, broken, 'plain_broken', { aged: false });
+    const r = resolveHeroicCharge({
+      board,
+      actorPosition: start,
+      direction: DIR_EQ,
+      bounds: BOUNDS,
+    });
+    expect(getTile(r.board, broken)).toBeUndefined();
     expect(r.bossDamage).toBe(0);
+    expect(r.bossDraw).toBe(false);
+    expect(r.forceEndTurn).toBe(true);
+    // continues to map edge along +q from r=0
+    expect(r.actorPosition.q).toBeGreaterThan(start.q);
+  });
+
+  it('empty path still forceEndTurn (unlike old shield charge)', () => {
+    const board = createEmptyBoard();
+    const start: Axial = { q: 0, r: 3 };
+    const r = resolveHeroicCharge({
+      board,
+      actorPosition: start,
+      direction: DIR_EQ,
+      bounds: BOUNDS,
+    });
+    expect(r.forceEndTurn).toBe(true);
+    expect(r.bossDamage).toBe(0);
+    expect(isInMapish(r.actorPosition)).toBe(true);
   });
 });
 
-describe('knight card stubs / instance', () => {
-  it('makeKnightCard marks attack & charge as counted', () => {
-    expect(makeKnightCard('attack', 'a1').counted).toBe(true);
-    expect(makeKnightCard('shield_charge', 'c1').counted).toBe(true);
+function isInMapish(h: Axial): boolean {
+  // cube distance from origin ≤ DEFAULT_MAP_RADIUS
+  const s = -h.q - h.r;
+  return (Math.abs(h.q) + Math.abs(h.r) + Math.abs(s)) / 2 <= DEFAULT_MAP_RADIUS;
+}
+
+describe('knight card defs / instance', () => {
+  it('heroic_charge counted+silenced; taunt neither', () => {
+    expect(KNIGHT_CARD_DEFS.heroic_charge.countsTowardAction).toBe(true);
+    expect(KNIGHT_CARD_DEFS.heroic_charge.silenced).toBe(true);
+    expect(KNIGHT_CARD_DEFS.taunt.countsTowardAction).toBe(false);
+    expect(KNIGHT_CARD_DEFS.taunt.silenced).toBe(false);
+    expect(makeKnightCard('heroic_charge', 'c1').counted).toBe(true);
+    expect(makeKnightCard('taunt', 't1').counted).toBe(false);
     expect(makeKnightCard('devotion', 'd1').counted).toBe(false);
+  });
+});
+
+describe('嘲諷 resolveTaunt', () => {
+  it('fail on own turn', () => {
+    const r = resolveTaunt({
+      isOthersTurn: false,
+      knightHex: { q: 2, r: 0 },
+    });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe('not_others_turn');
+    expect(r.counted).toBe(false);
+    expect(r.silenced).toBe(false);
+    expect(r.bossDamage).toBe(0);
+  });
+
+  it('succeeds on others turn; blocks ring 1', () => {
+    const center: Axial = { q: 2, r: 0 };
+    const r = resolveTaunt({
+      isOthersTurn: true,
+      knightHex: center,
+    });
+    expect(r.ok).toBe(true);
+    expect(r.tauntPriority).toBe(TAUNT_PRIORITY);
+    expect(r.tauntPriority).toBe(100);
+    expect(r.bossPlaceRestriction).toEqual({
+      type: 'taunt',
+      center,
+      ringDistance: 1,
+    });
+    expect(tauntBlocksPlacement(r.bossPlaceRestriction, { q: 3, r: 0 })).toBe(
+      true,
+    );
+    expect(tauntBlocksPlacement(r.bossPlaceRestriction, { q: 5, r: 0 })).toBe(
+      false,
+    );
+  });
+
+  it('priority > barrier; overrides existing barrier', () => {
+    expect(TAUNT_PRIORITY).toBeGreaterThan(BARRIER_PRIORITY);
+    const r = resolveTaunt({
+      isOthersTurn: true,
+      knightHex: { q: 2, r: 0 },
+      existingBarrier: { priority: BARRIER_PRIORITY, targetHex: { q: 4, r: 0 } },
+    });
+    expect(r.ok).toBe(true);
+    expect(r.overridesBarrier).toBe(true);
+    expect(r.tauntPriority).toBeGreaterThan(BARRIER_PRIORITY);
   });
 });
 
@@ -280,79 +405,6 @@ describe('堅定信仰 resolveFaith', () => {
     expect(r.ok).toBe(true);
     expect(r.cleared).toBe(0);
     expect(r.curseStacks).toBe(0);
-  });
-});
-
-describe('護身 resolveGuard', () => {
-  it('happy：直線、破碎可穿、落到友軍旁', () => {
-    let board = createEmptyBoard();
-    // (0,4)→(0,1)：中間 (0,3) 破碎可穿；(0,2) 空可站落點
-    const actor: Axial = { q: 0, r: 4 };
-    const midBroken: Axial = { q: 0, r: 3 };
-    const ally: Axial = { q: 0, r: 1 };
-    const landing: Axial = { q: 0, r: 2 };
-    board = placeTerrain(board, midBroken, 'plain_broken');
-
-    const r = resolveGuard({
-      board,
-      actorPosition: actor,
-      allyHex: ally,
-      landingHex: landing,
-    });
-    expect(r.ok).toBe(true);
-    expect(r.counted).toBe(true);
-    expect(r.actorPosition).toEqual(landing);
-    expect(r.events).toContainEqual({
-      type: 'ActorMoved',
-      from: actor,
-      to: landing,
-    });
-  });
-
-  it('fail：完整牆擋視線', () => {
-    let board = createEmptyBoard();
-    const actor: Axial = { q: 0, r: 3 };
-    const mid: Axial = { q: 0, r: 2 };
-    const ally: Axial = { q: 0, r: 1 };
-    board = placeTerrain(board, mid, 'plain');
-
-    const r = resolveGuard({
-      board,
-      actorPosition: actor,
-      allyHex: ally,
-      landingHex: mid,
-    });
-    expect(r.ok).toBe(false);
-    expect(r.reason).toBe('line_of_sight_blocked');
-  });
-
-  it('fail：非直線', () => {
-    const board = createEmptyBoard();
-    const r = resolveGuard({
-      board,
-      actorPosition: { q: 0, r: 3 },
-      allyHex: { q: 1, r: 1 },
-      landingHex: { q: 0, r: 1 },
-    });
-    expect(r.ok).toBe(false);
-    expect(r.reason).toBe('not_straight_line');
-  });
-
-  it('fail：落點不可站', () => {
-    let board = createEmptyBoard();
-    // 直線 (2,0)→(4,0) 視線空；落點選友軍旁但不在中線上並鋪牆
-    const actor: Axial = { q: 2, r: 0 };
-    const ally: Axial = { q: 4, r: 0 };
-    const landing: Axial = { q: 3, r: 1 }; // 鄰 ally，非中線
-    board = placeTerrain(board, landing, 'plain');
-    const r = resolveGuard({
-      board,
-      actorPosition: actor,
-      allyHex: ally,
-      landingHex: landing,
-    });
-    expect(r.ok).toBe(false);
-    expect(r.reason).toBe('landing_not_standable');
   });
 });
 

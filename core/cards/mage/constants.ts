@@ -16,3 +16,9 @@ export const BARRIER_RETARGET_MAX_DIST = 3;
 
 /** 磁力屏障：法師下一回合開始抽牌修正。 */
 export const BARRIER_NEXT_TURN_DRAW_DELTA = -1;
+
+/**
+ * 磁力屏障：王鋪牆限制優先級。
+ * 低於騎士嘲諷（TAUNT_PRIORITY=100）；衝突時嘲諷覆蓋。
+ */
+export const BARRIER_PRIORITY = 10;
