@@ -1,6 +1,6 @@
 /**
  * 地形種類屬性查表（handoff §4）。
- * 包圍（enclosure）本步不做，僅留下註解供下一步。
+ * 包圍（enclosure）演算法見 core/enclosure；此處僅資料層標記。
  * UNRESOLVED 行為以註解標明，不自行發明。
  */
 
