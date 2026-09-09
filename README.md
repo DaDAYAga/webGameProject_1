@@ -73,7 +73,15 @@
 - **胡鬧氣瓶** `resolveMischiefBottle`：棄 1 射擊 → +1 抽（射擊結算回傳 `drawFromAmmo`）
 - 大亂流／Power UP／大招：TODO stub only
 
-不含法師牌、牌庫 UI、React。
+### core/cards/mage（御風＋位面完成）
+
+法師 PVE 純函式結算（handoff §10／§12 step 8）：
+- **御風術** `resolveWindControl`：計次；推 1 格（`amplified` → 2）；可動 plain／broken／curse／開場牆；不可動 silence／punish；`pushTerrain` + `wouldEliminate` 禁壓頭
+- **位面調換** `resolvePlanarSwap`：不計次；兩人皆距離法師 ≤3；不可王／出局、可封印；`endTurn`；被換者本輪沉默免疫旗標；增幅後 `silenced:false`
+- **魔法箭** `resolveMagicArrow`：薄包 `computeRangedDamageToBoss`（無裝填槽；bonus 由增幅傳入）
+- 強能增幅／聚精／屏障：TODO stub only
+
+不含牌庫 UI、React。
 
 ## 如何跑測試
 
@@ -87,4 +95,4 @@ npx vitest run
 
 ## 下一步
 
-實作 **法師御風＋位面交換**（handoff §12 step 8；建議優先於剩餘槍手牌）。不要一次做 UI／完整牌庫。
+React 薄手牌 UI（handoff §12 step 9），或補完剩餘法師牌（增幅／屏障／聚精）。不要一次做完整牌庫／AI。
