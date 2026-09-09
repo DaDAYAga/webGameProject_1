@@ -44,6 +44,16 @@
 
 不含戰鬥結算、真實牌庫、React。
 
+### core/combat（完成）
+
+戰鬥純函式（design-amendments 2026-09-09b／開場 aged 傷王路徑）：
+- 常數 `RANGED_SWEET_RADIUS = 3`
+- 近戰打王本體：僅 `distance === 1` 有效
+- 遠程（射擊／魔法箭）：任意距離；甜區 ≤3 完整傷，區外 −1；**無擋線 −1**；最低 1 ⇒ effective
+- 預留 `ignoreRangePenalty`
+- 拆老化 plain／plain_broken 傷王（`tileDestroyDamagesBoss`／`applyTerrainHit` → `BossDamaged`）
+- 不含完整卡牌目錄、AI、React
+
 ## 如何跑測試
 
 安裝依賴後執行：
@@ -56,4 +66,4 @@ npx vitest run
 
 ## 下一步
 
-實作 **core/combat**（有效傷才抽王牌；遠程甜區 ≤3、無擋線 −1）。不要一次做 UI。
+實作 **knight attack＋charge**（近戰攻擊模組；衝鋒在 combat core 之後）。不要一次做 UI／完整牌庫。
