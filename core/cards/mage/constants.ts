@@ -14,8 +14,16 @@ export const FOCUS_DRAW_AMPLIFIED = 3;
 /** 磁力屏障：增幅寄出時目標與法師最大距離。 */
 export const BARRIER_RETARGET_MAX_DIST = 3;
 
-/** 磁力屏障：法師下一回合開始抽牌修正。 */
+/**
+ * @deprecated 已廢：屏障副作用改為下一回合不可再出屏障（見 blockBarrierNextTurn）。
+ * 保留符號僅防舊引用；成功路徑不再使用抽牌懲罰。
+ */
 export const BARRIER_NEXT_TURN_DRAW_DELTA = -1;
+
+/**
+ * 磁力屏障：成功後下一回合不可再出屏障（冷卻標記常數，語意固定為 true）。
+ */
+export const BARRIER_BLOCK_NEXT_TURN = true;
 
 /**
  * 磁力屏障：王鋪牆限制優先級。

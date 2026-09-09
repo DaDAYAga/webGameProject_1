@@ -1,14 +1,14 @@
 /**
  * 法師「磁力屏障」×2：本輪結束前王不能鋪目標鄰 1。
  * 未增幅＝自己；增幅後寄給距離 ≤3 的其他未出局者，自己不再受保護。
- * 代價：法師下一回合開始抽 −1。計次；受沉默。
+ * 代價：法師下一回合不可再出屏障（冷卻）。計次；受沉默。
  * 優先級 BARRIER_PRIORITY=10；騎士嘲諷 TAUNT_PRIORITY=100 較高，衝突時嘲諷覆蓋。
  * // UNRESOLVED: 交接未明示屏障是否計次 → 預設計次（與 DEFS 對齊）。
  */
 
 import { distance, neighbors, type Axial } from '../../hex/index.js';
 import {
-  BARRIER_NEXT_TURN_DRAW_DELTA,
+  BARRIER_BLOCK_NEXT_TURN,
   BARRIER_PRIORITY,
   BARRIER_RETARGET_MAX_DIST,
 } from './constants.js';
@@ -32,8 +32,6 @@ export type ResolveBarrierInput = {
   target?: MageActorRef;
   /** 寄出最大距離；預設 BARRIER_RETARGET_MAX_DIST。 */
   maxDistance?: number;
-  /** 下一回合抽牌修正；預設 BARRIER_NEXT_TURN_DRAW_DELTA。 */
-  nextTurnDrawDelta?: number;
 };
 
 /**
@@ -62,8 +60,6 @@ export function barrierBlocksPlacement(
 export function resolveBarrier(input: ResolveBarrierInput): BarrierResult {
   const amplified = input.amplified === true;
   const maxDist = input.maxDistance ?? BARRIER_RETARGET_MAX_DIST;
-  const drawDelta =
-    input.nextTurnDrawDelta ?? BARRIER_NEXT_TURN_DRAW_DELTA;
 
   let targetId = input.mageId;
   let targetHex = input.mageHex;
@@ -95,7 +91,8 @@ export function resolveBarrier(input: ResolveBarrierInput): BarrierResult {
     protectedHexes,
     /** 本輪結束失效（上層於 RoundEnded 清）。 */
     expires: 'end_of_round',
-    nextTurnDrawDelta: drawDelta,
+    /** 法師下一回合不可再出屏障。 */
+    blockBarrierNextTurn: BARRIER_BLOCK_NEXT_TURN,
     mageId: input.mageId,
     /** 低於嘲諷；衝突時嘲諷覆蓋。 */
     priority: BARRIER_PRIORITY,
@@ -106,7 +103,7 @@ export function resolveBarrier(input: ResolveBarrierInput): BarrierResult {
       type: 'BarrierApplied',
       targetActorId: targetId,
       protectedHexes,
-      nextTurnDrawDelta: drawDelta,
+      blockBarrierNextTurn: true,
     },
   ];
 
@@ -116,6 +113,7 @@ export function resolveBarrier(input: ResolveBarrierInput): BarrierResult {
     counted: true,
     amplified,
     aura,
+    barrierBlockedNextTurn: true,
   };
 }
 

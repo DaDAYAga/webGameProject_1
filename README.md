@@ -78,9 +78,9 @@
 
 法師 PVE 純函式結算（handoff §10；`constants.ts`）：
 - **御風術**／**位面調換**／**魔法箭**（`amplified` 已銜接）
-- **強能增幅** `resolveAmplify`：不計次；棄 1；`amplifiedPending` 供下一張招
+- **強能增幅** `resolveAmplify`：不計次；**不棄牌**；`amplifiedPending` 供下一張招
 - **聚精會神** `resolveFocus`：抽 2（增幅 3）；不計次；強制結束回合
-- **磁力屏障** `resolveBarrier`：本輪王不可鋪目標鄰 1；增幅寄出 dist≤3；下回合抽 −1；計次（UNRESOLVED 預設）
+- **磁力屏障** `resolveBarrier`：本輪王不可鋪目標鄰 1；增幅寄出 dist≤3；下一回合不可再出屏障；計次（UNRESOLVED 預設）
 
 不含牌庫 UI、React。
 

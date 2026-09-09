@@ -198,3 +198,38 @@
 - 不要改回「抽 3」或白送不耗卡臨時射擊
 - 不要把 ignoreRangePenalty 做成永久被動
 - 不要改法師
+
+---
+
+## 2026-09-09h — 法師增幅／屏障（鎖定）
+
+> 來源：人類定案「法師鎖牌：強能增幅不再棄牌；磁力屏障改冷卻」。  
+> **覆寫**舊「強能增幅棄 1」「磁力屏障下一回合抽 −1」。
+
+### 定案 — 強能增幅 `resolveAmplify`
+
+- ×2；**不計次**；**受沉默**（定義表不變）。
+- **不再棄牌**（移除 discard-1／`discardInstanceId`／手牌棄牌路徑）。
+- 成功僅武裝本回合 buff：`amplifiedPending:true` → 下一張招帶 `amplified`；未使用則回合結束失效。
+- 升級效果不變：箭 +1；御風 2 步；位面不受沉默；聚精 +1 抽；屏障改寄出。
+
+### 定案 — 磁力屏障 `resolveBarrier` 副作用
+
+- **移除**成功路徑的 `nextTurnDrawDelta: -1`／`BARRIER_NEXT_TURN_DRAW_DELTA` 抽牌懲罰。
+- **改為**：下一回合**不可再出屏障**（冷卻）。
+  - 結果旗標：`barrierBlockedNextTurn: true`
+  - 光環／事件欄：`blockBarrierNextTurn: true`
+- 常數：`BARRIER_BLOCK_NEXT_TURN = true`；`BARRIER_NEXT_TURN_DRAW_DELTA` 僅 deprecated 防舊引用。
+- **維持**：計次；受沉默；本輪結束前保護目標鄰 1；增幅寄出 dist≤3；`BARRIER_PRIORITY=10`（嘲諷 100 覆蓋）不變。
+
+### 給 bot（禁改）
+
+- 不要把棄 1 加回增幅
+- 不要把下回合抽 −1 加回屏障成功路徑
+- 不要改屏障計次／沉默／優先級（除非測試被迫）
+
+### 未定（玩起來再調）
+
+- 屏障冷卻是否跨輪／僅下一自己回合（本鎖定＝下一回合不可再出）
+- 磁力屏障是否計次（仍 UNRESOLVED，預設計次）
+

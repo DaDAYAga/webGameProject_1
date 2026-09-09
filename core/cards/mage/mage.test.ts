@@ -9,7 +9,7 @@ import {
 import { DEFAULT_MAP_RADIUS, isSealed } from '../../enclosure/index.js';
 import {
   AMPLIFY_ARROW_BONUS,
-  BARRIER_NEXT_TURN_DRAW_DELTA,
+  BARRIER_BLOCK_NEXT_TURN,
   BARRIER_PRIORITY,
   BARRIER_RETARGET_MAX_DIST,
   FOCUS_DRAW,
@@ -338,26 +338,18 @@ describe('MAGE_CARD_DEFS / makeMageCard', () => {
 });
 
 describe('強能增幅 resolveAmplify', () => {
-  it('happy：棄 1 並 armed', () => {
+  it('happy：不棄牌並 armed', () => {
     const hand = [
       makeMageCard('wind', 'w1'),
       makeMageCard('magic_arrow', 'a1'),
     ];
-    const r = resolveAmplify({ hand, discardInstanceId: 'w1' });
+    const r = resolveAmplify({ hand });
     expect(r.ok).toBe(true);
     expect(r.counted).toBe(false);
     expect(r.amplifiedPending).toBe(true);
-    expect(r.hand.map((c) => c.instanceId)).toEqual(['a1']);
+    expect(r.hand.map((c) => c.instanceId)).toEqual(['w1', 'a1']);
     expect(r.events).toContainEqual({ type: 'AmplifyArmed' });
-  });
-
-  it('fail：棄牌不在手', () => {
-    const r = resolveAmplify({
-      hand: [makeMageCard('wind', 'w1')],
-      discardInstanceId: 'nope',
-    });
-    expect(r.ok).toBe(false);
-    expect(r.reason).toBe('discard_not_in_hand');
+    expect(r.events.every((e) => e.type !== 'CardDiscarded')).toBe(true);
   });
 
   it('增幅箭：amplified → +AMPLIFY_ARROW_BONUS', () => {
@@ -397,12 +389,19 @@ describe('磁力屏障 resolveBarrier', () => {
     expect(r.ok).toBe(true);
     expect(r.counted).toBe(true);
     expect(r.aura?.targetActorId).toBe('mage');
-    expect(r.aura?.nextTurnDrawDelta).toBe(BARRIER_NEXT_TURN_DRAW_DELTA);
+    expect(r.aura?.blockBarrierNextTurn).toBe(BARRIER_BLOCK_NEXT_TURN);
+    expect(r.barrierBlockedNextTurn).toBe(true);
     expect(r.aura?.priority).toBe(BARRIER_PRIORITY);
     expect(r.aura?.priority).toBe(10);
     expect(r.aura?.protectedHexes).toHaveLength(6);
     expect(barrierBlocksPlacement(r.aura, { q: 3, r: 0 })).toBe(true);
     expect(barrierBlocksPlacement(r.aura, { q: 5, r: 0 })).toBe(false);
+    expect(r.events).toContainEqual({
+      type: 'BarrierApplied',
+      targetActorId: 'mage',
+      protectedHexes: r.aura!.protectedHexes,
+      blockBarrierNextTurn: true,
+    });
   });
 
   it('增幅：寄出距離 ≤3 的其他人', () => {

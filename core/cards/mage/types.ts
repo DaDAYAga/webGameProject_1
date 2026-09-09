@@ -58,7 +58,8 @@ export type MageCardEvent =
       type: 'BarrierApplied';
       targetActorId: string;
       protectedHexes: Axial[];
-      nextTurnDrawDelta: number;
+      /** 法師下一回合不可再出屏障。 */
+      blockBarrierNextTurn: true;
     };
 
 /** 御風術結算結果。 */
@@ -113,7 +114,6 @@ export type AmplifyResult = {
   events: MageCardEvent[];
   counted: false;
   hand: MageCardInstance[];
-  discardedInstanceId?: string;
   /** 本回合下一張招應帶 amplified。 */
   amplifiedPending: boolean;
 };
@@ -138,7 +138,8 @@ export type BarrierAura = {
   targetHex: Axial;
   protectedHexes: Axial[];
   expires: 'end_of_round';
-  nextTurnDrawDelta: number;
+  /** 法師下一回合不可再出屏障（冷卻）。 */
+  blockBarrierNextTurn: true;
   mageId: string;
   /**
    * 鋪牆限制優先級（BARRIER_PRIORITY=10）。
@@ -155,4 +156,6 @@ export type BarrierResult = {
   counted: true;
   amplified: boolean;
   aura?: BarrierAura;
+  /** 成功時：下一回合不可再出屏障。 */
+  barrierBlockedNextTurn?: true;
 };
