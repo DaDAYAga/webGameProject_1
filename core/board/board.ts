@@ -47,10 +47,10 @@ export function createEmptyBoard(): Board {
 }
 
 /**
- * 開場棋盤：王 (0,0) 周圍距離 1 的 6 格鋪開場牆（不老化）。
- * 預設：已破碎（plain_broken + noAge）— 一擊可拆，拆掉傷王。
- * 難度選項 intactStarterWalls：開場為完整 plain_starter（需先破碎再拆）。
- * 擋移動；不擋遠程傷害（見 design-amendments）。
+ * 開場棋盤：王 (0,0) 周圍距離 1 的 6 格鋪開場牆。
+ * 預設：已破碎且已老化（plain_broken + aged）— 一擊可拆；拆掉走「拆老化牆傷王」同一條。
+ * 難度選項 intactStarterWalls：開場為完整但已老化的 plain（需先破碎再拆）。
+ * 擋移動；不擋遠程傷害。不跑老化計時（開場直接是 aged 狀態）。
  */
 export type OpeningBoardOptions = {
   /** true = 開場牆完整（較難）；預設 false = 開場已破碎 */
@@ -64,8 +64,8 @@ export function createOpeningBoard(opts: OpeningBoardOptions = {}): Board {
     tiles.set(
       hexKey(h),
       intact
-        ? makeTile('plain_starter')
-        : makeTile('plain_broken', { noAge: true, aged: false }),
+        ? makeTile('plain', { aged: true })
+        : makeTile('plain_broken', { aged: true }),
     );
   }
   return { tiles };

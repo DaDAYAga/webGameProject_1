@@ -92,8 +92,8 @@ export function kindAllowsCrack(kind: TerrainKind): boolean {
 
 /**
  * 此格銷毀時是否依規則傷王。
- * - 開場牆系（plain_starter，或 noAge 的 plain_broken）：拆掉 → 傷王（2026-09-09d 定案）
- * - 一般 plain／plain_broken：僅已老化才傷王
+ * plain／plain_broken：僅已老化才傷王（開場牆預設已 aged，故拆掉傷王與此對齊）。
+ * plain_starter：依 aged（開場預設不再用此 kind；保留查表相容）。
  * // UNRESOLVED: 吃掉詛咒格是否傷王
  */
 export function tileDestroyDamagesBoss(tile: Tile): boolean {
@@ -101,10 +101,7 @@ export function tileDestroyDamagesBoss(tile: Tile): boolean {
     // UNRESOLVED: 吃掉詛咒格是否傷王
     return false;
   }
-  // 開場牆（完整或已破碎但 noAge）拆掉傷王
-  if (tile.kind === 'plain_starter') return true;
-  if (tile.noAge === true && tile.kind === 'plain_broken') return true;
-  if (tile.kind === 'plain' || tile.kind === 'plain_broken') {
+  if (tile.kind === 'plain' || tile.kind === 'plain_broken' || tile.kind === 'plain_starter') {
     return tile.aged === true;
   }
   return false;

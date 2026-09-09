@@ -21,7 +21,7 @@ import {
 const O: Axial = { q: 0, r: 0 };
 
 describe('opening board — 開場環王 6 牆', () => {
-  it('default: 6 already-broken noAge walls on distance-1', () => {
+  it('default: 6 already-broken aged walls on distance-1', () => {
     const board = createOpeningBoard();
     expect(board.tiles.size).toBe(6);
 
@@ -31,18 +31,17 @@ describe('opening board — 開場環王 6 牆', () => {
       expect(distance(O, h)).toBe(1);
       const tile = getTile(board, h);
       expect(tile?.kind).toBe('plain_broken');
-      expect(tile?.noAge).toBe(true);
-      expect(tile?.aged).toBe(false);
+      expect(tile?.aged).toBe(true);
     }
   });
 
-  it('difficulty intactStarterWalls: 6 plain_starter intact', () => {
+  it('difficulty intactStarterWalls: 6 intact aged plain', () => {
     const board = createOpeningBoard({ intactStarterWalls: true });
     expect(board.tiles.size).toBe(6);
     for (const h of neighbors(O)) {
       const tile = getTile(board, h);
-      expect(tile?.kind).toBe('plain_starter');
-      expect(tile?.noAge).toBe(true);
+      expect(tile?.kind).toBe('plain');
+      expect(tile?.aged).toBe(true);
     }
   });
 
@@ -90,11 +89,11 @@ describe('legal stand hexes — 站格', () => {
 });
 
 describe('crack / destroy — 破碎與拆牆', () => {
-  it('default opening broken wall: one hit destroys and damages boss', () => {
+  it('default opening broken aged wall: one hit destroys and damages boss', () => {
     const board0 = createOpeningBoard();
     const cell: Axial = { q: 1, r: 0 };
     expect(getTile(board0, cell)?.kind).toBe('plain_broken');
-    expect(getTile(board0, cell)?.noAge).toBe(true);
+    expect(getTile(board0, cell)?.aged).toBe(true);
 
     const hit = crackTile(board0, cell);
     expect(hit.ok).toBe(true);
@@ -103,10 +102,11 @@ describe('crack / destroy — 破碎與拆牆', () => {
     expect(getTile(hit.board, cell)).toBeUndefined();
   });
 
-  it('intactStarterWalls: crack then destroy; destroy damages boss; noAge preserved', () => {
+  it('intactStarterWalls: crack keeps aged; destroy damages boss via aged rule', () => {
     const board0 = createOpeningBoard({ intactStarterWalls: true });
     const cell: Axial = { q: 1, r: 0 };
-    expect(getTile(board0, cell)?.kind).toBe('plain_starter');
+    expect(getTile(board0, cell)?.kind).toBe('plain');
+    expect(getTile(board0, cell)?.aged).toBe(true);
 
     const hit1 = crackTile(board0, cell);
     expect(hit1.ok).toBe(true);
@@ -115,7 +115,7 @@ describe('crack / destroy — 破碎與拆牆', () => {
     expect(hit1.damagesBoss).toBe(false);
     const broken = getTile(hit1.board, cell)!;
     expect(broken.kind).toBe('plain_broken');
-    expect(broken.noAge).toBe(true);
+    expect(broken.aged).toBe(true);
 
     const hit2 = crackTile(hit1.board, cell);
     expect(hit2.ok).toBe(true);
@@ -176,7 +176,7 @@ describe('push — 可推地形搬移', () => {
     expect(next).not.toBeNull();
     expect(getTile(next!, from)).toBeUndefined();
     expect(getTile(next!, to)?.kind).toBe('plain_broken');
-    expect(getTile(next!, to)?.noAge).toBe(true);
+    expect(getTile(next!, to)?.aged).toBe(true);
   });
 
   it('cannot push onto boss cell (0,0)', () => {
@@ -197,12 +197,17 @@ describe('push — 可推地形搬移', () => {
 });
 
 describe('destroyTile direct — 銷毀旗標', () => {
-  it('destroying noAge broken starter damages boss', () => {
+  it('destroying aged broken wall damages boss; unaged does not', () => {
     let board = createEmptyBoard();
-    board = placeTerrain(board, { q: 1, r: 0 }, 'plain_broken', { noAge: true });
+    board = placeTerrain(board, { q: 1, r: 0 }, 'plain_broken', { aged: true });
     const r = destroyTile(board, { q: 1, r: 0 });
     expect(r.destroyed).toBe(true);
     expect(r.damagesBoss).toBe(true);
+
+    board = placeTerrain(createEmptyBoard(), { q: 2, r: 0 }, 'plain_broken', { aged: false });
+    const r2 = destroyTile(board, { q: 2, r: 0 });
+    expect(r2.destroyed).toBe(true);
+    expect(r2.damagesBoss).toBe(false);
   });
 });
 
