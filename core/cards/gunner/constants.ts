@@ -11,11 +11,8 @@ export const TURBULENCE_MOVE_BASE = 1;
 /** Power UP!!：從牌庫檢射擊最多張數。 */
 export const POWER_UP_DIG_SHOTS = 2;
 
-/** 來吧! 大鬧一場!：抽牌數。 */
-export const BIG_SHOW_DRAW = 3;
-
 /** 來吧! 大鬧一場!：成功時免費裝填頑皮層（傷害）。 */
 export const BIG_SHOW_FREE_DAMAGE = 1;
 
-/** 來吧! 大鬧一場!：成功時免費裝填胡鬧層（抽牌）。 */
+/** 來吧! 大鬧一場!：成功時免費裝填胡鬧層（抽牌；於後續射擊結算時抽）。 */
 export const BIG_SHOW_FREE_DRAW = 1;

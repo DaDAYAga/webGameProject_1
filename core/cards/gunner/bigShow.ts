@@ -1,42 +1,36 @@
 /**
  * 槍手「來吧! 大鬧一場!」×1：出牌前不可移動。
- * 抽 3；抽到的非射擊可全部立刻使用（事件／hook stub）；再可打 1 射擊。
- * 成功時免費裝填 +1 傷＋+1 抽（可超 cap）；該後續射擊忽略甜區外 −1。
- * 計次；受沉默。不要擅自削弱。
+ * 成功：免費裝填 +1 傷＋+1 抽（可超 cap）→ 立刻白送 1 發臨時射擊（不耗手上射擊牌），
+ * 且 ignoreRangePenalty；裝填於該射擊結算時套用並清空（同 Power UP temp_shot）。
+ * **不抽牌**。計次；受沉默。不要擅自削弱。
  */
 
+import type { Axial } from '../../hex/index.js';
 import { addAmmoUnchecked } from './ammo.js';
-import {
-  BIG_SHOW_DRAW,
-  BIG_SHOW_FREE_DAMAGE,
-  BIG_SHOW_FREE_DRAW,
-} from './constants.js';
+import { BIG_SHOW_FREE_DAMAGE, BIG_SHOW_FREE_DRAW } from './constants.js';
+import { resolveGunnerShot } from './shot.js';
 import {
   EMPTY_AMMO_SLOT,
   type AmmoSlotState,
   type GunnerCardEvent,
-  type GunnerCardInstance,
   type BigShowResult,
 } from './types.js';
 
 export type ResolveBigShowInput = {
   /** 出牌前是否已移動；已移動則失敗。 */
   hasMovedThisTurn: boolean;
-  /** 牌庫（從頭抽）。 */
-  deck: GunnerCardInstance[];
-  /** 當前裝填槽；成功時免費 +傷害／+抽（可超 cap）。 */
+  /** 當前裝填槽；成功時先免費 +傷／+抽，再由白送射擊消耗清空。 */
   ammo?: AmmoSlotState;
-  /** 抽牌數；預設 BIG_SHOW_DRAW。 */
-  drawCount?: number;
+  /** 白送臨時射擊的攻擊者格（必填於成功路徑）。 */
+  attacker?: Axial;
+  bossHex?: Axial;
 };
 
 /**
- * 結算大招（純函式；不串完整氣瓶／射擊 cascade）。
- * - drawn：抽到的牌
- * - immediatePlayEligible：其中非射擊（上層可立刻 resolve）
- * - mayPlayShot：之後可再打 1 射擊（旗標）
- * - ignoreRangePenaltyForShot：該後續射擊應以 ignoreRangePenalty 傳入 resolveGunnerShot
- * - ammo：成功時已含免費氣瓶層（可超 AMMO_SLOT_MAX_TOTAL）
+ * 結算大招（純函式）。
+ * 1. hasMovedThisTurn → 失敗
+ * 2. 免費氣瓶（可超 cap）
+ * 3. 立刻 resolveGunnerShot（白送、不耗卡、ignoreRangePenalty）
  */
 export function resolveBigShow(input: ResolveBigShowInput): BigShowResult {
   const ammoIn = input.ammo ?? EMPTY_AMMO_SLOT;
@@ -47,63 +41,64 @@ export function resolveBigShow(input: ResolveBigShowInput): BigShowResult {
       reason: 'already_moved',
       events: [],
       counted: true,
-      drawn: [],
-      remainingDeck: input.deck,
-      immediatePlayEligible: [],
-      mayPlayShot: false,
-      ignoreRangePenaltyForShot: false,
+      tempShotGranted: false,
       ammo: ammoIn,
     };
   }
 
-  const n = input.drawCount ?? BIG_SHOW_DRAW;
-  const drawn = input.deck.slice(0, n);
-  const remainingDeck = input.deck.slice(n);
-  const immediatePlayEligible = drawn.filter((c) => c.cardId !== 'shot');
+  if (!input.attacker) {
+    return {
+      ok: false,
+      reason: 'temp_shot_missing_attacker',
+      events: [],
+      counted: true,
+      tempShotGranted: false,
+      ammo: ammoIn,
+    };
+  }
 
   // 免費氣瓶：頑皮 +1 傷、胡鬧 +1 抽；不棄牌、可超 cap
-  const ammo = addAmmoUnchecked(
+  const ammoLoaded = addAmmoUnchecked(
     ammoIn,
     BIG_SHOW_FREE_DAMAGE,
     BIG_SHOW_FREE_DRAW,
   );
 
+  // 白送臨時射擊：不耗手上射擊牌；固定忽略距離罰
+  const shot = resolveGunnerShot({
+    attacker: input.attacker,
+    ammo: ammoLoaded,
+    ignoreRangePenalty: true,
+    bossHex: input.bossHex,
+  });
+
   const events: GunnerCardEvent[] = [
     {
-      type: 'CardsDrawn',
-      instanceIds: drawn.map((c) => c.instanceId),
-      count: drawn.length,
+      type: 'AmmoSlotLoaded',
+      damageBonus: ammoLoaded.damageBonus,
+      drawBonus: ammoLoaded.drawBonus,
     },
+    {
+      type: 'BigShowAmmoGranted',
+      damageBonus: BIG_SHOW_FREE_DAMAGE,
+      drawBonus: BIG_SHOW_FREE_DRAW,
+      ammo: ammoLoaded,
+    },
+    { type: 'TempShotPlayed' },
+    ...shot.events,
   ];
-  if (immediatePlayEligible.length > 0) {
-    events.push({
-      type: 'ImmediatePlayAllowed',
-      instanceIds: immediatePlayEligible.map((c) => c.instanceId),
-    });
-  }
-  events.push({
-    type: 'AmmoSlotLoaded',
-    damageBonus: ammo.damageBonus,
-    drawBonus: ammo.drawBonus,
-  });
-  events.push({
-    type: 'BigShowAmmoGranted',
-    damageBonus: BIG_SHOW_FREE_DAMAGE,
-    drawBonus: BIG_SHOW_FREE_DRAW,
-    ammo,
-  });
-  events.push({ type: 'MayPlayShot', afterBigShow: true });
 
   return {
     ok: true,
     events,
     counted: true,
-    drawn,
-    remainingDeck,
-    immediatePlayEligible,
-    mayPlayShot: true,
-    /** 上層打後續射擊時應傳 resolveGunnerShot({ ignoreRangePenalty: true }) */
-    ignoreRangePenaltyForShot: true,
-    ammo,
+    tempShotGranted: true,
+    bossDamage: shot.bossDamage,
+    inSweetZone: shot.inSweetZone,
+    drawFromAmmo: shot.drawFromAmmo,
+    /** 射擊結算後槽已清空 */
+    ammo: shot.ammo,
+    /** 射擊前（含免費層）槽快照，供測試／UI */
+    ammoBeforeShot: ammoLoaded,
   };
 }

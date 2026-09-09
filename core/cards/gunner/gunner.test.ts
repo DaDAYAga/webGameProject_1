@@ -5,7 +5,6 @@ import {
 } from '../../board/index.js';
 import {
   AMMO_SLOT_MAX_TOTAL,
-  BIG_SHOW_DRAW,
   BIG_SHOW_FREE_DAMAGE,
   BIG_SHOW_FREE_DRAW,
   EMPTY_AMMO_SLOT,
@@ -342,31 +341,23 @@ describe('Power UP!! resolvePowerUp', () => {
 });
 
 describe('來吧! 大鬧一場! resolveBigShow', () => {
-  it('happy：抽 3、非射擊可立刻用、可再打射擊、免費氣瓶、忽略距離罰', () => {
-    const deck = handWith(
-      { cardId: 'playful_bottle', id: 'b1' },
-      { cardId: 'shot', id: 's1' },
-      { cardId: 'mischief_bottle', id: 'b2' },
-      { cardId: 'shot', id: 's2' },
-    );
-    const r = resolveBigShow({ hasMovedThisTurn: false, deck });
+  it('happy：不抽牌、免費氣瓶、白送臨時射擊不耗卡、忽略距離罰', () => {
+    const r = resolveBigShow({
+      hasMovedThisTurn: false,
+      ammo: EMPTY_AMMO_SLOT,
+      attacker: { q: 2, r: 0 },
+    });
     expect(r.ok).toBe(true);
-    expect(r.drawn).toHaveLength(BIG_SHOW_DRAW);
-    expect(r.immediatePlayEligible.map((c) => c.instanceId)).toEqual([
-      'b1',
-      'b2',
-    ]);
-    expect(r.mayPlayShot).toBe(true);
-    expect(r.ignoreRangePenaltyForShot).toBe(true);
-    expect(r.ammo).toEqual({
+    expect(r.tempShotGranted).toBe(true);
+    expect(r.ammoBeforeShot).toEqual({
       damageBonus: BIG_SHOW_FREE_DAMAGE,
       drawBonus: BIG_SHOW_FREE_DRAW,
     });
-    expect(r.remainingDeck.map((c) => c.instanceId)).toEqual(['s2']);
-    expect(r.events).toContainEqual({
-      type: 'MayPlayShot',
-      afterBigShow: true,
-    });
+    // 空槽 + 免費 → {1,1} → 基礎1+1=2 傷、抽 1；射擊後槽清空
+    expect(r.bossDamage).toBe(2);
+    expect(r.drawFromAmmo).toBe(1);
+    expect(r.ammo).toEqual(EMPTY_AMMO_SLOT);
+    expect(r.events).toContainEqual({ type: 'TempShotPlayed' });
     expect(r.events).toContainEqual({
       type: 'AmmoSlotLoaded',
       damageBonus: 1,
@@ -378,51 +369,52 @@ describe('來吧! 大鬧一場! resolveBigShow', () => {
       drawBonus: BIG_SHOW_FREE_DRAW,
       ammo: { damageBonus: 1, drawBonus: 1 },
     });
+    expect(r.events.some((e) => e.type === 'CardsDrawn')).toBe(false);
+    expect(r.events.some((e) => e.type === 'MayPlayShot')).toBe(false);
+    expect(r.events.some((e) => e.type === 'ImmediatePlayAllowed')).toBe(false);
   });
 
-  it('happy：已滿槽 {1,1} 仍可超 cap → {2,2}；後續射擊甜區內 3 傷', () => {
-    const deck = handWith(
-      { cardId: 'shot', id: 's1' },
-      { cardId: 'shot', id: 's2' },
-      { cardId: 'shot', id: 's3' },
-    );
+  it('happy：已滿槽 {1,1} → 免費 {2,2} → 白送射擊 3 傷 + 抽 2', () => {
     const full: AmmoSlotState = { damageBonus: 1, drawBonus: 1 };
     expect(ammoSlotTotal(full)).toBe(AMMO_SLOT_MAX_TOTAL);
-    // 一般氣瓶仍受 cap 限制
     expect(addAmmo(full, 1, 0)).toBeNull();
 
     const r = resolveBigShow({
       hasMovedThisTurn: false,
-      deck,
       ammo: full,
+      attacker: { q: 2, r: 0 },
     });
     expect(r.ok).toBe(true);
-    expect(r.ammo).toEqual({ damageBonus: 2, drawBonus: 2 });
-    expect(r.ignoreRangePenaltyForShot).toBe(true);
-
-    // 文件峰值：{2,2} → 基礎1 +2 = 3 傷、抽 2（另加大招抽 3）
-    const shot = resolveGunnerShot({
-      attacker: { q: 2, r: 0 },
-      ammo: r.ammo,
-      ignoreRangePenalty: r.ignoreRangePenaltyForShot,
-    });
-    expect(shot.ok).toBe(true);
-    expect(shot.bossDamage).toBe(3);
-    expect(shot.drawFromAmmo).toBe(2);
+    expect(r.tempShotGranted).toBe(true);
+    expect(r.ammoBeforeShot).toEqual({ damageBonus: 2, drawBonus: 2 });
+    expect(r.bossDamage).toBe(3);
+    expect(r.drawFromAmmo).toBe(2);
+    expect(r.ammo).toEqual(EMPTY_AMMO_SLOT);
+    expect(r.events).toContainEqual({ type: 'TempShotPlayed' });
   });
 
-  it('fail：出牌前已移動（裝填不變、無忽略距離旗標）', () => {
+  it('fail：出牌前已移動（不裝填、不白送射擊）', () => {
     const ammo: AmmoSlotState = { damageBonus: 1, drawBonus: 0 };
     const r = resolveBigShow({
       hasMovedThisTurn: true,
-      deck: handWith({ cardId: 'shot', id: 's1' }),
       ammo,
+      attacker: { q: 2, r: 0 },
     });
     expect(r.ok).toBe(false);
     expect(r.reason).toBe('already_moved');
-    expect(r.mayPlayShot).toBe(false);
-    expect(r.ignoreRangePenaltyForShot).toBe(false);
+    expect(r.tempShotGranted).toBe(false);
     expect(r.ammo).toEqual(ammo);
+    expect(r.bossDamage).toBeUndefined();
+  });
+
+  it('fail：缺 attacker', () => {
+    const r = resolveBigShow({
+      hasMovedThisTurn: false,
+      ammo: EMPTY_AMMO_SLOT,
+    });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe('temp_shot_missing_attacker');
+    expect(r.tempShotGranted).toBe(false);
   });
 
   it('addAmmoUnchecked 可超 cap；一般 addAmmo 不可', () => {
@@ -431,8 +423,9 @@ describe('來吧! 大鬧一場! resolveBigShow', () => {
     expect(
       addAmmoUnchecked(full, BIG_SHOW_FREE_DAMAGE, BIG_SHOW_FREE_DRAW),
     ).toEqual({ damageBonus: 2, drawBonus: 2 });
-    expect(
-      addAmmo(full, 1, 1, { ignoreCap: true }),
-    ).toEqual({ damageBonus: 2, drawBonus: 2 });
+    expect(addAmmo(full, 1, 1, { ignoreCap: true })).toEqual({
+      damageBonus: 2,
+      drawBonus: 2,
+    });
   });
 });
