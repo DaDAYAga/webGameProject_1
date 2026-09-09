@@ -1,5 +1,5 @@
 /**
- * 槍手「Power UP!!」×2：本回合須已移動後可出。
+ * 槍手「Power UP!!」×2：無「須已移動」限制（2026-09-09 人類訂正）。
  * 二選一：(a) 從牌庫檢最多 2 張射擊；(b) 本牌當臨時射擊（吃裝填清槽，之後不可立刻氣瓶）。
  * 計次；受沉默。
  */
@@ -17,8 +17,10 @@ import type {
 export type PowerUpMode = 'dig_shots' | 'temp_shot';
 
 export type ResolvePowerUpInput = {
-  /** 本回合是否已移動；未移動不可出。 */
-  hasMovedThisTurn: boolean;
+  /**
+   * @deprecated 已無「須已移動」限制；保留欄位以免舊呼叫端壞掉，忽略其值。
+   */
+  hasMovedThisTurn?: boolean;
   mode: PowerUpMode;
   /**
    * dig_shots：牌庫頂端順序（本層只從中取出射擊，最多 POWER_UP_DIG_SHOTS）。
@@ -38,19 +40,6 @@ export type ResolvePowerUpInput = {
  * 結算 Power UP!!（純函式）。
  */
 export function resolvePowerUp(input: ResolvePowerUpInput): PowerUpResult {
-  if (!input.hasMovedThisTurn) {
-    return {
-      ok: false,
-      reason: 'not_moved',
-      events: [],
-      counted: true,
-      mode: input.mode,
-      dugShots: [],
-      remainingDeck: input.deck ?? [],
-      cannotBottleImmediately: false,
-    };
-  }
-
   if (input.mode === 'dig_shots') {
     const limit = input.digLimit ?? POWER_UP_DIG_SHOTS;
     const deck = [...(input.deck ?? [])];

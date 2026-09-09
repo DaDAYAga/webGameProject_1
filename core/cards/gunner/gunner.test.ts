@@ -327,14 +327,14 @@ describe('Power UP!! resolvePowerUp', () => {
     expect(r.events).toContainEqual({ type: 'TempShotPlayed' });
   });
 
-  it('fail：未移動', () => {
+  it('允許未移動就出 Power UP', () => {
     const r = resolvePowerUp({
       hasMovedThisTurn: false,
       mode: 'dig_shots',
       deck: [],
     });
-    expect(r.ok).toBe(false);
-    expect(r.reason).toBe('not_moved');
+    expect(r.ok).toBe(true);
+    expect(r.mode).toBe('dig_shots');
   });
 });
 

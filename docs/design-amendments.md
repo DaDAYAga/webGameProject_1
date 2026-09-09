@@ -76,3 +76,11 @@
 ### 實作
 
 `core/board.absorbCurseAt(board, hex)`：僅當該格為 curse 時清空並回新 board；上身不在本層。
+
+
+---
+
+## 2026-09-09e — Power UP!! 無移動前置（鎖定）
+
+**Power UP!!** 本身**沒有**「本回合須已移動」限制。  
+覆寫舊交接／實作中的 `hasMovedThisTurn` 門檻（大招「來吧!」仍為出牌前不可移動）。
