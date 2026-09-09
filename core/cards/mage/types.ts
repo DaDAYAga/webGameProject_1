@@ -20,7 +20,7 @@ export type MageCardId =
   | 'planar_swap';
 
 /**
- * 棋上單位薄描述（御風壓頭／位面調換用）。
+ * 棋上單位薄描述（御風壓頭／位面調換／屏障用）。
  * 本層不持有完整 actor 狀態。
  */
 export type MageActorRef = {
@@ -30,7 +30,7 @@ export type MageActorRef = {
   hex: Axial;
   /** 是否為王（不可被位面調換）。 */
   isBoss?: boolean;
-  /** 是否已出局（不可被位面調換）。 */
+  /** 是否已出局（不可被位面調換／屏障寄出）。 */
   eliminated?: boolean;
   /** 是否已封印（可被調換；御風壓頭檢查用）。 */
   sealed?: boolean;
@@ -50,7 +50,16 @@ export type MageCardEvent =
   | { type: 'TerrainPushed'; from: Axial; to: Axial; steps: number }
   | { type: 'ActorsSwapped'; aId: string; bId: string; aHex: Axial; bHex: Axial }
   | { type: 'TurnForceEnded'; reason: string }
-  | { type: 'SilenceImmunityThisRound'; actorIds: string[] };
+  | { type: 'SilenceImmunityThisRound'; actorIds: string[] }
+  | { type: 'CardDiscarded'; instanceId: string; cardId: string }
+  | { type: 'AmplifyArmed' }
+  | { type: 'DrawRequested'; count: number }
+  | {
+      type: 'BarrierApplied';
+      targetActorId: string;
+      protectedHexes: Axial[];
+      nextTurnDrawDelta: number;
+    };
 
 /** 御風術結算結果。 */
 export type WindControlResult = {
@@ -94,4 +103,51 @@ export type MagicArrowResult = {
   counted: true;
   bossDamage: number;
   inSweetZone: boolean;
+  amplified?: boolean;
+};
+
+/** 強能增幅結算結果。 */
+export type AmplifyResult = {
+  ok: boolean;
+  reason?: string;
+  events: MageCardEvent[];
+  counted: false;
+  hand: MageCardInstance[];
+  discardedInstanceId?: string;
+  /** 本回合下一張招應帶 amplified。 */
+  amplifiedPending: boolean;
+};
+
+/** 聚精會神結算結果。 */
+export type FocusResult = {
+  ok: boolean;
+  reason?: string;
+  events: MageCardEvent[];
+  counted: false;
+  drawCount: number;
+  amplified: boolean;
+  endTurn: true;
+};
+
+/**
+ * 磁力屏障光環（本輪結束前有效）。
+ * 王不可在 protectedHexes 鋪牆。
+ */
+export type BarrierAura = {
+  targetActorId: string;
+  targetHex: Axial;
+  protectedHexes: Axial[];
+  expires: 'end_of_round';
+  nextTurnDrawDelta: number;
+  mageId: string;
+};
+
+/** 磁力屏障結算結果。 */
+export type BarrierResult = {
+  ok: boolean;
+  reason?: string;
+  events: MageCardEvent[];
+  counted: true;
+  amplified: boolean;
+  aura?: BarrierAura;
 };

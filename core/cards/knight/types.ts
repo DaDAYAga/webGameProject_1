@@ -30,14 +30,25 @@ export type KnightCardInstance = {
   counted: boolean;
 };
 
-/** 攻擊／衝鋒共用的結算事件（含戰鬥事件）。 */
+/** 攻擊／衝鋒／其餘共用的結算事件（含戰鬥事件）。 */
 export type KnightCardEvent =
   | CombatEvent
   | { type: 'TurnForceEnded'; reason: string }
   | { type: 'ActorMoved'; from: Axial; to: Axial }
   | { type: 'CurseAbsorbed'; hex: Axial }
   | { type: 'CurseStopped'; hex: Axial }
-  | { type: 'ChargeBlocked'; hex: Axial; reason: 'punish' | 'boss' | 'silence' };
+  | { type: 'ChargeBlocked'; hex: Axial; reason: 'punish' | 'boss' | 'silence' }
+  | { type: 'CurseClearedSelf'; amount: number }
+  | {
+      type: 'CurseAbsorbedFromAlly';
+      amount: number;
+      selfStacks: number;
+      allyStacks: number;
+    }
+  | { type: 'UndyingExtracted'; reason: string }
+  | { type: 'ActorRevived'; hex: Axial }
+  | { type: 'UndyingClearedBroken'; hex: Axial }
+  | { type: 'UndyingCrackedPlain'; hex: Axial };
 
 /** 攻擊結算結果。 */
 export type KnightAttackResult = {
@@ -71,4 +82,53 @@ export type ShieldChargeResult = {
   forceEndTurn: boolean;
   bossDamage: number;
   curseStop: CurseStopMode;
+};
+
+/** 堅定信仰結算結果。 */
+export type FaithResult = {
+  ok: boolean;
+  reason?: string;
+  events: KnightCardEvent[];
+  counted: true;
+  /** 結算後自身詛咒層。 */
+  curseStacks: number;
+  /** 實際清除層數。 */
+  cleared: number;
+};
+
+/** 護身結算結果。 */
+export type GuardResult = {
+  ok: boolean;
+  reason?: string;
+  board: Board;
+  actorPosition: Axial;
+  events: KnightCardEvent[];
+  counted: true;
+};
+
+/** 奉獻結算結果。 */
+export type DevotionResult = {
+  ok: boolean;
+  reason?: string;
+  events: KnightCardEvent[];
+  counted: false;
+  selfCurseStacks: number;
+  allyCurseStacks: number;
+  /** 會致死而抽出不死存在。 */
+  extractedUndying: boolean;
+  wouldKillSelf: boolean;
+};
+
+/** 不死存在結算結果。 */
+export type UndyingResult = {
+  ok: boolean;
+  reason?: string;
+  board: Board;
+  actorPosition?: Axial;
+  events: KnightCardEvent[];
+  counted: false;
+  forceEndTurn: boolean;
+  /** 恆為 0（清破碎不傷王）。 */
+  bossDamage: number;
+  affectedHexes: Axial[];
 };

@@ -1,15 +1,25 @@
 import { describe, expect, it } from 'vitest';
 import {
+  createEmptyBoard,
+  placeTerrain,
+} from '../../board/index.js';
+import {
   AMMO_SLOT_MAX_TOTAL,
+  BIG_SHOW_DRAW,
   EMPTY_AMMO_SLOT,
   GUNNER_SHOT_BASE_DAMAGE,
+  POWER_UP_DIG_SHOTS,
+  TURBULENCE_MOVE_BASE,
   addAmmo,
   ammoSlotTotal,
   canAddAmmo,
   makeGunnerCard,
+  resolveBigShow,
   resolveGunnerShot,
   resolveMischiefBottle,
   resolvePlayfulBottle,
+  resolvePowerUp,
+  resolveTurbulence,
   type AmmoSlotState,
   type GunnerCardInstance,
 } from './index.js';
@@ -213,5 +223,150 @@ describe('bottle requires discarding a shot', () => {
     const r = resolvePlayfulBottle({ ammo: EMPTY_AMMO_SLOT, hand: [] });
     expect(r.ok).toBe(false);
     expect(r.reason).toBe('no_shot_to_discard');
+  });
+});
+
+describe('大亂流 resolveTurbulence', () => {
+  it('happy：棄 2 氣瓶走 3 格', () => {
+    const board = createEmptyBoard();
+    const hand = handWith(
+      { cardId: 'playful_bottle', id: 'b1' },
+      { cardId: 'mischief_bottle', id: 'b2' },
+      { cardId: 'shot', id: 's1' },
+    );
+    const start = { q: 2, r: 0 };
+    const path = [
+      { q: 3, r: 0 },
+      { q: 4, r: 0 },
+      { q: 5, r: 0 },
+    ];
+    const r = resolveTurbulence({
+      board,
+      actorPosition: start,
+      hand,
+      discardBottleInstanceIds: ['b1', 'b2'],
+      path,
+    });
+    expect(r.ok).toBe(true);
+    expect(r.counted).toBe(true);
+    expect(r.steps).toBe(2 + TURBULENCE_MOVE_BASE);
+    expect(r.actorPosition).toEqual({ q: 5, r: 0 });
+    expect(r.hand.map((c) => c.instanceId)).toEqual(['s1']);
+  });
+
+  it('happy：棄 0 仍走 1 格', () => {
+    const r = resolveTurbulence({
+      board: createEmptyBoard(),
+      actorPosition: { q: 2, r: 0 },
+      hand: handWith({ cardId: 'shot', id: 's1' }),
+      discardBottleInstanceIds: [],
+      path: [{ q: 3, r: 0 }],
+    });
+    expect(r.ok).toBe(true);
+    expect(r.steps).toBe(TURBULENCE_MOVE_BASE);
+  });
+
+  it('fail：不穿破碎（路徑踩 plain_broken）', () => {
+    let board = createEmptyBoard();
+    board = placeTerrain(board, { q: 3, r: 0 }, 'plain_broken');
+    const r = resolveTurbulence({
+      board,
+      actorPosition: { q: 2, r: 0 },
+      hand: [],
+      discardBottleInstanceIds: [],
+      path: [{ q: 3, r: 0 }],
+    });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe('path_not_standable');
+  });
+
+  it('fail：棄的不是氣瓶牌', () => {
+    const hand = handWith({ cardId: 'shot', id: 's1' });
+    const r = resolveTurbulence({
+      board: createEmptyBoard(),
+      actorPosition: { q: 2, r: 0 },
+      hand,
+      discardBottleInstanceIds: ['s1'],
+      path: [{ q: 3, r: 0 }, { q: 4, r: 0 }],
+    });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe('not_bottle_card');
+  });
+});
+
+describe('Power UP!! resolvePowerUp', () => {
+  it('happy：移動後檢 2 射擊', () => {
+    const deck = handWith(
+      { cardId: 'playful_bottle', id: 'b1' },
+      { cardId: 'shot', id: 's1' },
+      { cardId: 'shot', id: 's2' },
+      { cardId: 'mischief_bottle', id: 'b2' },
+    );
+    const r = resolvePowerUp({
+      hasMovedThisTurn: true,
+      mode: 'dig_shots',
+      deck,
+    });
+    expect(r.ok).toBe(true);
+    expect(r.dugShots).toHaveLength(POWER_UP_DIG_SHOTS);
+    expect(r.dugShots.map((c) => c.instanceId)).toEqual(['s1', 's2']);
+    expect(r.remainingDeck.map((c) => c.instanceId)).toEqual(['b1', 'b2']);
+  });
+
+  it('happy：臨時射擊吃裝填清槽且 cannotBottle', () => {
+    const r = resolvePowerUp({
+      hasMovedThisTurn: true,
+      mode: 'temp_shot',
+      attacker: { q: 2, r: 0 },
+      ammo: { damageBonus: 1, drawBonus: 0 },
+    });
+    expect(r.ok).toBe(true);
+    expect(r.cannotBottleImmediately).toBe(true);
+    expect(r.bossDamage).toBe(2);
+    expect(r.ammo).toEqual(EMPTY_AMMO_SLOT);
+    expect(r.events).toContainEqual({ type: 'TempShotPlayed' });
+  });
+
+  it('fail：未移動', () => {
+    const r = resolvePowerUp({
+      hasMovedThisTurn: false,
+      mode: 'dig_shots',
+      deck: [],
+    });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe('not_moved');
+  });
+});
+
+describe('來吧! 大鬧一場! resolveBigShow', () => {
+  it('happy：抽 3、非射擊可立刻用、可再打射擊', () => {
+    const deck = handWith(
+      { cardId: 'playful_bottle', id: 'b1' },
+      { cardId: 'shot', id: 's1' },
+      { cardId: 'mischief_bottle', id: 'b2' },
+      { cardId: 'shot', id: 's2' },
+    );
+    const r = resolveBigShow({ hasMovedThisTurn: false, deck });
+    expect(r.ok).toBe(true);
+    expect(r.drawn).toHaveLength(BIG_SHOW_DRAW);
+    expect(r.immediatePlayEligible.map((c) => c.instanceId)).toEqual([
+      'b1',
+      'b2',
+    ]);
+    expect(r.mayPlayShot).toBe(true);
+    expect(r.remainingDeck.map((c) => c.instanceId)).toEqual(['s2']);
+    expect(r.events).toContainEqual({
+      type: 'MayPlayShot',
+      afterBigShow: true,
+    });
+  });
+
+  it('fail：出牌前已移動', () => {
+    const r = resolveBigShow({
+      hasMovedThisTurn: true,
+      deck: handWith({ cardId: 'shot', id: 's1' }),
+    });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe('already_moved');
   });
 });

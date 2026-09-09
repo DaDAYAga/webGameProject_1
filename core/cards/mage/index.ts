@@ -1,6 +1,6 @@
 /**
  * 法師 PVE 卡牌（core/cards/mage）。
- * 已實作：御風術、位面調換；魔法箭薄包遠程。其餘 TODO stub。
+ * 已實作：御風、位面、魔法箭、強能增幅、聚精會神、磁力屏障。
  */
 
 export type {
@@ -11,7 +11,19 @@ export type {
   WindControlResult,
   PlanarSwapResult,
   MagicArrowResult,
+  AmplifyResult,
+  FocusResult,
+  BarrierAura,
+  BarrierResult,
 } from './types.js';
+
+export {
+  AMPLIFY_ARROW_BONUS,
+  FOCUS_DRAW,
+  FOCUS_DRAW_AMPLIFIED,
+  BARRIER_RETARGET_MAX_DIST,
+  BARRIER_NEXT_TURN_DRAW_DELTA,
+} from './constants.js';
 
 export {
   WIND_BASE_STEPS,
@@ -36,9 +48,23 @@ export {
 } from './magicArrow.js';
 
 export {
-  resolveAmplifyStub,
-  resolveFocusStub,
-  resolveBarrierStub,
+  resolveAmplify,
+  type ResolveAmplifyInput,
+} from './amplify.js';
+
+export {
+  resolveFocus,
+  type ResolveFocusInput,
+} from './focus.js';
+
+export {
+  barrierProtectedHexes,
+  barrierBlocksPlacement,
+  resolveBarrier,
+  type ResolveBarrierInput,
+} from './barrier.js';
+
+export {
   MAGE_CARD_DEFS,
   makeMageCard,
 } from './stubs.js';

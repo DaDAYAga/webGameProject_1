@@ -2,6 +2,7 @@
  * 槍手卡牌／裝填槽型別（handoff §9 + 遠程修訂 2026-09-09b）。
  */
 
+import type { Axial } from '../../hex/index.js';
 import type { CombatEvent } from '../../combat/index.js';
 import type { CardDefinition, CardInstanceBase, CardKindTag } from '../types.js';
 
@@ -39,12 +40,19 @@ export type GunnerCardInstance = CardInstanceBase & {
   cardId: GunnerCardId;
 };
 
-/** 射擊結算事件。 */
+/** 射擊／氣瓶／其餘結算事件。 */
 export type GunnerCardEvent =
   | CombatEvent
   | { type: 'AmmoSlotCleared' }
   | { type: 'AmmoSlotLoaded'; damageBonus: number; drawBonus: number }
-  | { type: 'ShotDiscarded'; instanceId: string };
+  | { type: 'ShotDiscarded'; instanceId: string }
+  | { type: 'BottlesDiscarded'; instanceIds: string[] }
+  | { type: 'ActorMoved'; from: Axial; to: Axial }
+  | { type: 'ShotsDug'; instanceIds: string[]; count: number }
+  | { type: 'TempShotPlayed' }
+  | { type: 'CardsDrawn'; instanceIds: string[]; count: number }
+  | { type: 'ImmediatePlayAllowed'; instanceIds: string[] }
+  | { type: 'MayPlayShot'; afterBigShow: true };
 
 /** 射擊結算結果。 */
 export type GunnerShotResult = {
@@ -79,6 +87,49 @@ export type GunnerBottleResult = {
   discardedShotId?: string;
   /** 更新後手牌（已移除棄掉的射擊；氣瓶本身由上層移除）。 */
   hand: GunnerCardInstance[];
+};
+
+/** 大亂流結算結果。 */
+export type TurbulenceResult = {
+  ok: boolean;
+  reason?: string;
+  events: GunnerCardEvent[];
+  counted: true;
+  actorPosition: Axial;
+  hand: GunnerCardInstance[];
+  discardedBottleIds: string[];
+  steps: number;
+};
+
+/** Power UP!! 結算結果。 */
+export type PowerUpResult = {
+  ok: boolean;
+  reason?: string;
+  events: GunnerCardEvent[];
+  counted: true;
+  mode: 'dig_shots' | 'temp_shot';
+  dugShots: GunnerCardInstance[];
+  remainingDeck: GunnerCardInstance[];
+  /** temp_shot 成功後不可立刻接氣瓶。 */
+  cannotBottleImmediately: boolean;
+  bossDamage?: number;
+  inSweetZone?: boolean;
+  drawFromAmmo?: number;
+  ammo?: AmmoSlotState;
+};
+
+/** 來吧! 大鬧一場! 結算結果。 */
+export type BigShowResult = {
+  ok: boolean;
+  reason?: string;
+  events: GunnerCardEvent[];
+  counted: true;
+  drawn: GunnerCardInstance[];
+  remainingDeck: GunnerCardInstance[];
+  /** 抽到的非射擊（可立刻使用；完整 cascade 由上層／事件 hook）。 */
+  immediatePlayEligible: GunnerCardInstance[];
+  /** 之後可再打 1 射擊。 */
+  mayPlayShot: boolean;
 };
 
 export type { CardDefinition, CardKindTag };

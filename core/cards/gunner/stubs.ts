@@ -1,25 +1,10 @@
 /**
- * 其餘槍手牌 stub（TODO）：僅匯出佔位，不實作結算。
- * 大亂流／Power UP!!／來吧! 大鬧一場!
+ * 槍手牌定義表 + makeGunnerCard。
+ * 結算見各 resolve* 模組（不再拋 stub）。
  */
 
 import type { CardDefinition } from '../types.js';
 import type { GunnerCardId, GunnerCardInstance } from './types.js';
-
-/** TODO: 大亂流 ×2 — 棄手上最多 2 張氣瓶牌 → 走棄牌數 + 1。 */
-export function resolveTurbulenceStub(): never {
-  throw new Error('TODO: resolveTurbulence not implemented');
-}
-
-/** TODO: Power UP!! ×2 — 移動後可出；檢 2 射擊或當臨時射擊（吃裝填清槽）。 */
-export function resolvePowerUpStub(): never {
-  throw new Error('TODO: resolvePowerUp not implemented');
-}
-
-/** TODO: 來吧! 大鬧一場! ×1 — 出牌前不可移動；抽 3；非射擊可立刻用；再可打 1 射擊。 */
-export function resolveBigShowStub(): never {
-  throw new Error('TODO: resolveBigShow not implemented');
-}
 
 /** 槍手牌定義表（薄標；氣瓶計次：UNRESOLVED 預設不計次）。 */
 export const GUNNER_CARD_DEFS: Record<GunnerCardId, CardDefinition> = {

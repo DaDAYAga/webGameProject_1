@@ -54,32 +54,33 @@
 - 拆老化 plain／plain_broken 傷王（`tileDestroyDamagesBoss`／`applyTerrainHit` → `BossDamaged`）
 - 不含完整卡牌目錄、AI、React
 
-### core/cards/knight（攻擊＋衝鋒完成）
+### core/cards/knight（完成）
 
-騎士 PVE 純函式結算（handoff §8／§12 step 6；定義表對齊共用 `CardDefinition`）：
-- **攻擊** `resolveKnightAttack`：計次；對王鄰 1 → 2 傷；對 plain 系 crack／destroy；不可指定 punish／curse；拆老化傷王
-- **盾牌衝鋒** `resolveShieldCharge`：直線最多 2 格；撞未老化牆 → 停前格破碎並強制結束回合；撞老化牆 → 穿過拆掉＋王 1 傷＋結束回合；punish／王格不可進仍結束回合
-- 詛咒截停：`curseStop: 'stop' | 'absorbMax1'`（**UNRESOLVED**，預設 `stop`）
-- 信仰／護身／奉獻／不死：TODO stub 匯出 only
+騎士 PVE 純函式結算（handoff §8；可調常數見 `constants.ts`）：
+- **攻擊** `resolveKnightAttack`：計次；對王鄰 1 → 2 傷；對 plain 系 crack／destroy；不可指定 punish／curse
+- **盾牌衝鋒** `resolveShieldCharge`：直線最多 2 格；撞牆／punish／王格規則；`curseStop` UNRESOLVED
+- **堅定信仰** `resolveFaith`：未移動清自己 1 層詛咒；計次
+- **護身** `resolveGuard`：直線友軍；完整牆／咒／懲／沉默擋視線；`plain_broken` 可穿；落到友軍旁可站格
+- **奉獻** `resolveDevotion`：鄰 1 吸隊友詛咒；不計次；致死 → `UndyingExtracted`；不傷王
+- **不死存在** `resolveUndying`：輪末復活；周圍破碎清空／完整改破碎；不傷王；奉獻同回合 defer
 
-共用薄型別：`core/cards/types.ts`（`CardDefinition`／`CardKindTag`；非 tag engine）。
+共用薄型別：`core/cards/types.ts`（`CardDefinition`／`CardKindTag`）。
 
-### core/cards/gunner（射擊＋裝填完成）
+### core/cards/gunner（完成）
 
-槍手 PVE 純函式結算（handoff §9 + 遠程修訂 2026-09-09b）：
-- **射擊** `resolveGunnerShot`：只打王、任意距離；`computeRangedDamageToBoss`；計次；套用裝填後**清空槽**
-- **裝填槽** `AmmoSlotState { damageBonus, drawBonus }` 合計 ≤ 2；跨回合直到射擊
-- **頑皮氣瓶** `resolvePlayfulBottle`：棄 1 射擊 → +1 傷
-- **胡鬧氣瓶** `resolveMischiefBottle`：棄 1 射擊 → +1 抽（射擊結算回傳 `drawFromAmmo`）
-- 大亂流／Power UP／大招：TODO stub only
+槍手 PVE 純函式結算（handoff §9 + 遠程修訂；`constants.ts`）：
+- **射擊**／**氣瓶**／裝填槽（合計 ≤2，射擊清槽）
+- **大亂流** `resolveTurbulence`：棄最多 2 張氣瓶牌 → 走棄牌數+1；不穿破碎
+- **Power UP!!** `resolvePowerUp`：須已移動；檢 2 射擊或臨時射擊（清槽、不可立刻氣瓶）
+- **來吧! 大鬧一場!** `resolveBigShow`：未移動；抽 3；非射擊可立刻用（事件 hook）；再可打 1 射擊
 
-### core/cards/mage（御風＋位面完成）
+### core/cards/mage（完成）
 
-法師 PVE 純函式結算（handoff §10／§12 step 8）：
-- **御風術** `resolveWindControl`：計次；推 1 格（`amplified` → 2）；可動 plain／broken／curse／開場牆；不可動 silence／punish；`pushTerrain` + `wouldEliminate` 禁壓頭
-- **位面調換** `resolvePlanarSwap`：不計次；兩人皆距離法師 ≤3；不可王／出局、可封印；`endTurn`；被換者本輪沉默免疫旗標；增幅後 `silenced:false`
-- **魔法箭** `resolveMagicArrow`：薄包 `computeRangedDamageToBoss`（無裝填槽；bonus 由增幅傳入）
-- 強能增幅／聚精／屏障：TODO stub only
+法師 PVE 純函式結算（handoff §10；`constants.ts`）：
+- **御風術**／**位面調換**／**魔法箭**（`amplified` 已銜接）
+- **強能增幅** `resolveAmplify`：不計次；棄 1；`amplifiedPending` 供下一張招
+- **聚精會神** `resolveFocus`：抽 2（增幅 3）；不計次；強制結束回合
+- **磁力屏障** `resolveBarrier`：本輪王不可鋪目標鄰 1；增幅寄出 dist≤3；下回合抽 −1；計次（UNRESOLVED 預設）
 
 不含牌庫 UI、React。
 
@@ -95,4 +96,4 @@ npx vitest run
 
 ## 下一步
 
-React 薄手牌 UI（handoff §12 step 9），或補完剩餘法師牌（增幅／屏障／聚精）。不要一次做完整牌庫／AI。
+**React 薄手牌 UI**（handoff §12 step 9）。不要一次做完整牌庫／AI。

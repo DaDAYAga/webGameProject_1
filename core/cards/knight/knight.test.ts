@@ -8,10 +8,16 @@ import {
 } from '../../board/index.js';
 import { AXIAL_DIRECTIONS, type Axial } from '../../hex/index.js';
 import {
+  FAITH_CURSE_CLEAR,
   KNIGHT_ATTACK_BOSS_DAMAGE,
+  KNIGHT_CURSE_DEATH_STACKS,
   makeKnightCard,
+  resolveDevotion,
+  resolveFaith,
+  resolveGuard,
   resolveKnightAttack,
   resolveShieldCharge,
+  resolveUndying,
 } from './index.js';
 
 const DIR_EQ = AXIAL_DIRECTIONS[0]!; // +q
@@ -249,5 +255,217 @@ describe('knight card stubs / instance', () => {
     expect(makeKnightCard('attack', 'a1').counted).toBe(true);
     expect(makeKnightCard('shield_charge', 'c1').counted).toBe(true);
     expect(makeKnightCard('devotion', 'd1').counted).toBe(false);
+  });
+});
+
+describe('堅定信仰 resolveFaith', () => {
+  it('happy：未移動清 1 層詛咒', () => {
+    const r = resolveFaith({ hasMovedThisTurn: false, curseStacks: 2 });
+    expect(r.ok).toBe(true);
+    expect(r.counted).toBe(true);
+    expect(r.cleared).toBe(FAITH_CURSE_CLEAR);
+    expect(r.curseStacks).toBe(1);
+    expect(r.events).toContainEqual({ type: 'CurseClearedSelf', amount: 1 });
+  });
+
+  it('fail：本回合已移動', () => {
+    const r = resolveFaith({ hasMovedThisTurn: true, curseStacks: 2 });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe('already_moved');
+    expect(r.curseStacks).toBe(2);
+  });
+
+  it('0 層仍可出，cleared=0', () => {
+    const r = resolveFaith({ hasMovedThisTurn: false, curseStacks: 0 });
+    expect(r.ok).toBe(true);
+    expect(r.cleared).toBe(0);
+    expect(r.curseStacks).toBe(0);
+  });
+});
+
+describe('護身 resolveGuard', () => {
+  it('happy：直線、破碎可穿、落到友軍旁', () => {
+    let board = createEmptyBoard();
+    // (0,4)→(0,1)：中間 (0,3) 破碎可穿；(0,2) 空可站落點
+    const actor: Axial = { q: 0, r: 4 };
+    const midBroken: Axial = { q: 0, r: 3 };
+    const ally: Axial = { q: 0, r: 1 };
+    const landing: Axial = { q: 0, r: 2 };
+    board = placeTerrain(board, midBroken, 'plain_broken');
+
+    const r = resolveGuard({
+      board,
+      actorPosition: actor,
+      allyHex: ally,
+      landingHex: landing,
+    });
+    expect(r.ok).toBe(true);
+    expect(r.counted).toBe(true);
+    expect(r.actorPosition).toEqual(landing);
+    expect(r.events).toContainEqual({
+      type: 'ActorMoved',
+      from: actor,
+      to: landing,
+    });
+  });
+
+  it('fail：完整牆擋視線', () => {
+    let board = createEmptyBoard();
+    const actor: Axial = { q: 0, r: 3 };
+    const mid: Axial = { q: 0, r: 2 };
+    const ally: Axial = { q: 0, r: 1 };
+    board = placeTerrain(board, mid, 'plain');
+
+    const r = resolveGuard({
+      board,
+      actorPosition: actor,
+      allyHex: ally,
+      landingHex: mid,
+    });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe('line_of_sight_blocked');
+  });
+
+  it('fail：非直線', () => {
+    const board = createEmptyBoard();
+    const r = resolveGuard({
+      board,
+      actorPosition: { q: 0, r: 3 },
+      allyHex: { q: 1, r: 1 },
+      landingHex: { q: 0, r: 1 },
+    });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe('not_straight_line');
+  });
+
+  it('fail：落點不可站', () => {
+    let board = createEmptyBoard();
+    // 直線 (2,0)→(4,0) 視線空；落點選友軍旁但不在中線上並鋪牆
+    const actor: Axial = { q: 2, r: 0 };
+    const ally: Axial = { q: 4, r: 0 };
+    const landing: Axial = { q: 3, r: 1 }; // 鄰 ally，非中線
+    board = placeTerrain(board, landing, 'plain');
+    const r = resolveGuard({
+      board,
+      actorPosition: actor,
+      allyHex: ally,
+      landingHex: landing,
+    });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe('landing_not_standable');
+  });
+});
+
+describe('奉獻 resolveDevotion', () => {
+  it('happy：鄰 1 吸 1 層', () => {
+    const r = resolveDevotion({
+      actorHex: { q: 2, r: 0 },
+      allyHex: { q: 3, r: 0 },
+      selfCurseStacks: 0,
+      allyCurseStacks: 2,
+    });
+    expect(r.ok).toBe(true);
+    expect(r.counted).toBe(false);
+    expect(r.selfCurseStacks).toBe(1);
+    expect(r.allyCurseStacks).toBe(1);
+    expect(r.extractedUndying).toBe(false);
+  });
+
+  it('致死 → 抽出不死存在', () => {
+    const r = resolveDevotion({
+      actorHex: { q: 2, r: 0 },
+      allyHex: { q: 3, r: 0 },
+      selfCurseStacks: KNIGHT_CURSE_DEATH_STACKS - 1,
+      allyCurseStacks: 1,
+    });
+    expect(r.ok).toBe(true);
+    expect(r.wouldKillSelf).toBe(true);
+    expect(r.extractedUndying).toBe(true);
+    expect(r.events).toContainEqual({
+      type: 'UndyingExtracted',
+      reason: 'devotion_lethal',
+    });
+  });
+
+  it('fail：非鄰 1', () => {
+    const r = resolveDevotion({
+      actorHex: { q: 2, r: 0 },
+      allyHex: { q: 4, r: 0 },
+      selfCurseStacks: 0,
+      allyCurseStacks: 1,
+    });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe('ally_not_adjacent');
+  });
+
+  it('fail：隊友無咒', () => {
+    const r = resolveDevotion({
+      actorHex: { q: 2, r: 0 },
+      allyHex: { q: 3, r: 0 },
+      selfCurseStacks: 0,
+      allyCurseStacks: 0,
+    });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe('ally_no_curse');
+  });
+});
+
+describe('不死存在 resolveUndying', () => {
+  it('happy：輪末復活；清破碎、裂完整；不傷王', () => {
+    let board = createEmptyBoard();
+    const land: Axial = { q: 3, r: 0 };
+    const broken: Axial = { q: 4, r: 0 };
+    const plain: Axial = { q: 3, r: -1 };
+    const curse: Axial = { q: 2, r: 0 };
+    board = placeTerrain(board, broken, 'plain_broken', { aged: true });
+    board = placeTerrain(board, plain, 'plain', { aged: false });
+    board = placeTerrain(board, curse, 'curse');
+
+    const r = resolveUndying({
+      board,
+      landingHex: land,
+      isDead: true,
+      hasUndyingInHand: true,
+      atRoundEndAfterActors: true,
+    });
+    expect(r.ok).toBe(true);
+    expect(r.forceEndTurn).toBe(true);
+    expect(r.bossDamage).toBe(0);
+    expect(getTile(r.board, broken)).toBeUndefined();
+    expect(getTile(r.board, plain)?.kind).toBe('plain_broken');
+    expect(getTile(r.board, curse)?.kind).toBe('curse');
+    expect(r.actorPosition).toEqual(land);
+  });
+
+  it('fail：奉獻同回合抽出須 defer', () => {
+    const r = resolveUndying({
+      board: createEmptyBoard(),
+      landingHex: { q: 2, r: 0 },
+      isDead: true,
+      hasUndyingInHand: true,
+      extractedThisRound: true,
+      atRoundEndAfterActors: true,
+    });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe('extracted_this_round_defer');
+  });
+
+  it('fail：非輪末／未死亡', () => {
+    const a = resolveUndying({
+      board: createEmptyBoard(),
+      landingHex: { q: 2, r: 0 },
+      isDead: false,
+      hasUndyingInHand: true,
+      atRoundEndAfterActors: true,
+    });
+    expect(a.reason).toBe('not_dead');
+    const b = resolveUndying({
+      board: createEmptyBoard(),
+      landingHex: { q: 2, r: 0 },
+      isDead: true,
+      hasUndyingInHand: true,
+      atRoundEndAfterActors: false,
+    });
+    expect(b.reason).toBe('not_round_end');
   });
 });

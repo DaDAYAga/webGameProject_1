@@ -1,6 +1,6 @@
 /**
  * 騎士 PVE 卡牌（core/cards/knight）。
- * 已實作：攻擊、盾牌衝鋒。其餘為 TODO stub。
+ * 已實作：攻擊、衝鋒、堅定信仰、護身、奉獻、不死存在。
  */
 
 export type {
@@ -10,7 +10,18 @@ export type {
   KnightAttackResult,
   CurseStopMode,
   ShieldChargeResult,
+  FaithResult,
+  GuardResult,
+  DevotionResult,
+  UndyingResult,
 } from './types.js';
+
+export {
+  KNIGHT_CURSE_DEATH_STACKS,
+  FAITH_CURSE_CLEAR,
+  DEVOTION_ABSORB,
+  UNDYING_LANDING_RADIUS,
+} from './constants.js';
 
 export {
   KNIGHT_ATTACK_BOSS_DAMAGE,
@@ -26,10 +37,30 @@ export {
 } from './shieldCharge.js';
 
 export {
-  resolveFaithStub,
-  resolveGuardStub,
-  resolveDevotionStub,
-  resolveUndyingStub,
+  resolveFaith,
+  type ResolveFaithInput,
+} from './faith.js';
+
+export {
+  guardSightBlockedByTile,
+  straightLineDirection,
+  hexesBetweenOnLine,
+  hasGuardLineOfSight,
+  resolveGuard,
+  type ResolveGuardInput,
+} from './guard.js';
+
+export {
+  resolveDevotion,
+  type ResolveDevotionInput,
+} from './devotion.js';
+
+export {
+  resolveUndying,
+  type ResolveUndyingInput,
+} from './undying.js';
+
+export {
   KNIGHT_CARD_DEFS,
   makeKnightCard,
 } from './stubs.js';

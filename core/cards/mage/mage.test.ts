@@ -8,14 +8,23 @@ import {
 } from '../../board/index.js';
 import { DEFAULT_MAP_RADIUS, isSealed } from '../../enclosure/index.js';
 import {
+  AMPLIFY_ARROW_BONUS,
+  BARRIER_NEXT_TURN_DRAW_DELTA,
+  BARRIER_RETARGET_MAX_DIST,
+  FOCUS_DRAW,
+  FOCUS_DRAW_AMPLIFIED,
   MAGE_CARD_DEFS,
   MAGIC_ARROW_BASE_DAMAGE,
   PLANAR_SWAP_MAX_DISTANCE,
   WIND_AMPLIFIED_STEPS,
   WIND_BASE_STEPS,
+  barrierBlocksPlacement,
   canWindPushFrom,
   makeMageCard,
   mageWindAllowsKind,
+  resolveAmplify,
+  resolveBarrier,
+  resolveFocus,
   resolveMagicArrow,
   resolvePlanarSwap,
   resolveWindControl,
@@ -324,5 +333,108 @@ describe('MAGE_CARD_DEFS / makeMageCard', () => {
     const c = makeMageCard('wind', 'w1');
     expect(c.countsTowardAction).toBe(true);
     expect(c.cardId).toBe('wind');
+  });
+});
+
+describe('強能增幅 resolveAmplify', () => {
+  it('happy：棄 1 並 armed', () => {
+    const hand = [
+      makeMageCard('wind', 'w1'),
+      makeMageCard('magic_arrow', 'a1'),
+    ];
+    const r = resolveAmplify({ hand, discardInstanceId: 'w1' });
+    expect(r.ok).toBe(true);
+    expect(r.counted).toBe(false);
+    expect(r.amplifiedPending).toBe(true);
+    expect(r.hand.map((c) => c.instanceId)).toEqual(['a1']);
+    expect(r.events).toContainEqual({ type: 'AmplifyArmed' });
+  });
+
+  it('fail：棄牌不在手', () => {
+    const r = resolveAmplify({
+      hand: [makeMageCard('wind', 'w1')],
+      discardInstanceId: 'nope',
+    });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe('discard_not_in_hand');
+  });
+
+  it('增幅箭：amplified → +AMPLIFY_ARROW_BONUS', () => {
+    const r = resolveMagicArrow({
+      attacker: { q: 1, r: 0 },
+      amplified: true,
+    });
+    expect(r.bossDamage).toBe(MAGIC_ARROW_BASE_DAMAGE + AMPLIFY_ARROW_BONUS);
+    expect(r.amplified).toBe(true);
+  });
+});
+
+describe('聚精會神 resolveFocus', () => {
+  it('happy：抽 2 並結束回合', () => {
+    const r = resolveFocus();
+    expect(r.ok).toBe(true);
+    expect(r.counted).toBe(false);
+    expect(r.drawCount).toBe(FOCUS_DRAW);
+    expect(r.endTurn).toBe(true);
+    expect(r.events).toContainEqual({ type: 'TurnForceEnded', reason: 'focus' });
+  });
+
+  it('增幅抽 3', () => {
+    const r = resolveFocus({ amplified: true });
+    expect(r.drawCount).toBe(FOCUS_DRAW_AMPLIFIED);
+    expect(r.amplified).toBe(true);
+  });
+});
+
+describe('磁力屏障 resolveBarrier', () => {
+  it('happy：未增幅保護自己鄰 1', () => {
+    const mageHex = { q: 2, r: 0 };
+    const r = resolveBarrier({
+      mageHex,
+      mageId: 'mage',
+    });
+    expect(r.ok).toBe(true);
+    expect(r.counted).toBe(true);
+    expect(r.aura?.targetActorId).toBe('mage');
+    expect(r.aura?.nextTurnDrawDelta).toBe(BARRIER_NEXT_TURN_DRAW_DELTA);
+    expect(r.aura?.protectedHexes).toHaveLength(6);
+    expect(barrierBlocksPlacement(r.aura, { q: 3, r: 0 })).toBe(true);
+    expect(barrierBlocksPlacement(r.aura, { q: 5, r: 0 })).toBe(false);
+  });
+
+  it('增幅：寄出距離 ≤3 的其他人', () => {
+    const mageHex = { q: 2, r: 0 };
+    const target: MageActorRef = { id: 'ally', hex: { q: 4, r: 0 } };
+    expect(
+      Math.abs(4 - 2) /* rough */,
+    ).toBeLessThanOrEqual(BARRIER_RETARGET_MAX_DIST);
+    const r = resolveBarrier({
+      mageHex,
+      mageId: 'mage',
+      amplified: true,
+      target,
+    });
+    expect(r.ok).toBe(true);
+    expect(r.aura?.targetActorId).toBe('ally');
+    expect(barrierBlocksPlacement(r.aura, { q: 5, r: 0 })).toBe(true);
+    // 法師自己鄰 1（且非目標鄰）不再保護
+    expect(barrierBlocksPlacement(r.aura, { q: 1, r: 0 })).toBe(false);
+  });
+
+  it('fail：增幅無目標／超距', () => {
+    const a = resolveBarrier({
+      mageHex: { q: 2, r: 0 },
+      mageId: 'mage',
+      amplified: true,
+    });
+    expect(a.reason).toBe('amplify_needs_target');
+
+    const b = resolveBarrier({
+      mageHex: { q: 2, r: 0 },
+      mageId: 'mage',
+      amplified: true,
+      target: { id: 'far', hex: { q: 2 + BARRIER_RETARGET_MAX_DIST + 1, r: 0 } },
+    });
+    expect(b.reason).toBe('target_out_of_range');
   });
 });
