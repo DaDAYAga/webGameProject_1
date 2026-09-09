@@ -54,6 +54,16 @@
 - 拆老化 plain／plain_broken 傷王（`tileDestroyDamagesBoss`／`applyTerrainHit` → `BossDamaged`）
 - 不含完整卡牌目錄、AI、React
 
+### core/cards/knight（攻擊＋衝鋒完成）
+
+騎士 PVE 純函式結算（handoff §8／§12 step 6）：
+- **攻擊** `resolveKnightAttack`：計次；對王鄰 1 → 2 傷；對 plain 系 crack／destroy；不可指定 punish／curse；拆老化傷王
+- **盾牌衝鋒** `resolveShieldCharge`：直線最多 2 格；撞未老化牆 → 停前格破碎並強制結束回合；撞老化牆 → 穿過拆掉＋王 1 傷＋結束回合；punish／王格不可進仍結束回合
+- 詛咒截停：`curseStop: 'stop' | 'absorbMax1'`（**UNRESOLVED**，預設 `stop`）
+- 信仰／護身／奉獻／不死：TODO stub 匯出 only
+
+不含槍手／法師牌、牌庫 UI、React。
+
 ## 如何跑測試
 
 安裝依賴後執行：
@@ -66,4 +76,4 @@ npx vitest run
 
 ## 下一步
 
-實作 **knight attack＋charge**（近戰攻擊模組；衝鋒在 combat core 之後）。不要一次做 UI／完整牌庫。
+實作 **槍手射擊＋裝填**（handoff §12 step 7；甜區／ammo 槽）。不要一次做 UI／完整牌庫。
