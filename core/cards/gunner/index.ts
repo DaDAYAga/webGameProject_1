@@ -25,12 +25,15 @@ export {
   TURBULENCE_MOVE_BASE,
   POWER_UP_DIG_SHOTS,
   BIG_SHOW_DRAW,
+  BIG_SHOW_FREE_DAMAGE,
+  BIG_SHOW_FREE_DRAW,
 } from './constants.js';
 
 export {
   ammoSlotTotal,
   canAddAmmo,
   addAmmo,
+  addAmmoUnchecked,
   clearAmmoSlot,
 } from './ammo.js';
 

@@ -52,7 +52,14 @@ export type GunnerCardEvent =
   | { type: 'TempShotPlayed' }
   | { type: 'CardsDrawn'; instanceIds: string[]; count: number }
   | { type: 'ImmediatePlayAllowed'; instanceIds: string[] }
-  | { type: 'MayPlayShot'; afterBigShow: true };
+  | { type: 'MayPlayShot'; afterBigShow: true }
+  /** 大招免費氣瓶：本次新增層數 + 裝填後槽狀態。 */
+  | {
+      type: 'BigShowAmmoGranted';
+      damageBonus: number;
+      drawBonus: number;
+      ammo: AmmoSlotState;
+    };
 
 /** 射擊結算結果。 */
 export type GunnerShotResult = {
@@ -130,6 +137,14 @@ export type BigShowResult = {
   immediatePlayEligible: GunnerCardInstance[];
   /** 之後可再打 1 射擊。 */
   mayPlayShot: boolean;
+  /**
+   * 成功時為 true：該後續射擊應忽略甜區外 −1。
+   * 上層呼叫 resolveGunnerShot 時傳 ignoreRangePenalty: true
+   * （等同 mayPlayShotIgnoreRange）。
+   */
+  ignoreRangePenaltyForShot: boolean;
+  /** 成功時含免費 +傷／+抽（可超 AMMO_SLOT_MAX_TOTAL）；失敗則原樣。 */
+  ammo: AmmoSlotState;
 };
 
 export type { CardDefinition, CardKindTag };

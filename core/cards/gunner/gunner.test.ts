@@ -6,11 +6,14 @@ import {
 import {
   AMMO_SLOT_MAX_TOTAL,
   BIG_SHOW_DRAW,
+  BIG_SHOW_FREE_DAMAGE,
+  BIG_SHOW_FREE_DRAW,
   EMPTY_AMMO_SLOT,
   GUNNER_SHOT_BASE_DAMAGE,
   POWER_UP_DIG_SHOTS,
   TURBULENCE_MOVE_BASE,
   addAmmo,
+  addAmmoUnchecked,
   ammoSlotTotal,
   canAddAmmo,
   makeGunnerCard,
@@ -339,7 +342,7 @@ describe('Power UP!! resolvePowerUp', () => {
 });
 
 describe('來吧! 大鬧一場! resolveBigShow', () => {
-  it('happy：抽 3、非射擊可立刻用、可再打射擊', () => {
+  it('happy：抽 3、非射擊可立刻用、可再打射擊、免費氣瓶、忽略距離罰', () => {
     const deck = handWith(
       { cardId: 'playful_bottle', id: 'b1' },
       { cardId: 'shot', id: 's1' },
@@ -354,19 +357,82 @@ describe('來吧! 大鬧一場! resolveBigShow', () => {
       'b2',
     ]);
     expect(r.mayPlayShot).toBe(true);
+    expect(r.ignoreRangePenaltyForShot).toBe(true);
+    expect(r.ammo).toEqual({
+      damageBonus: BIG_SHOW_FREE_DAMAGE,
+      drawBonus: BIG_SHOW_FREE_DRAW,
+    });
     expect(r.remainingDeck.map((c) => c.instanceId)).toEqual(['s2']);
     expect(r.events).toContainEqual({
       type: 'MayPlayShot',
       afterBigShow: true,
     });
+    expect(r.events).toContainEqual({
+      type: 'AmmoSlotLoaded',
+      damageBonus: 1,
+      drawBonus: 1,
+    });
+    expect(r.events).toContainEqual({
+      type: 'BigShowAmmoGranted',
+      damageBonus: BIG_SHOW_FREE_DAMAGE,
+      drawBonus: BIG_SHOW_FREE_DRAW,
+      ammo: { damageBonus: 1, drawBonus: 1 },
+    });
   });
 
-  it('fail：出牌前已移動', () => {
+  it('happy：已滿槽 {1,1} 仍可超 cap → {2,2}；後續射擊甜區內 3 傷', () => {
+    const deck = handWith(
+      { cardId: 'shot', id: 's1' },
+      { cardId: 'shot', id: 's2' },
+      { cardId: 'shot', id: 's3' },
+    );
+    const full: AmmoSlotState = { damageBonus: 1, drawBonus: 1 };
+    expect(ammoSlotTotal(full)).toBe(AMMO_SLOT_MAX_TOTAL);
+    // 一般氣瓶仍受 cap 限制
+    expect(addAmmo(full, 1, 0)).toBeNull();
+
+    const r = resolveBigShow({
+      hasMovedThisTurn: false,
+      deck,
+      ammo: full,
+    });
+    expect(r.ok).toBe(true);
+    expect(r.ammo).toEqual({ damageBonus: 2, drawBonus: 2 });
+    expect(r.ignoreRangePenaltyForShot).toBe(true);
+
+    // 文件峰值：{2,2} → 基礎1 +2 = 3 傷、抽 2（另加大招抽 3）
+    const shot = resolveGunnerShot({
+      attacker: { q: 2, r: 0 },
+      ammo: r.ammo,
+      ignoreRangePenalty: r.ignoreRangePenaltyForShot,
+    });
+    expect(shot.ok).toBe(true);
+    expect(shot.bossDamage).toBe(3);
+    expect(shot.drawFromAmmo).toBe(2);
+  });
+
+  it('fail：出牌前已移動（裝填不變、無忽略距離旗標）', () => {
+    const ammo: AmmoSlotState = { damageBonus: 1, drawBonus: 0 };
     const r = resolveBigShow({
       hasMovedThisTurn: true,
       deck: handWith({ cardId: 'shot', id: 's1' }),
+      ammo,
     });
     expect(r.ok).toBe(false);
     expect(r.reason).toBe('already_moved');
+    expect(r.mayPlayShot).toBe(false);
+    expect(r.ignoreRangePenaltyForShot).toBe(false);
+    expect(r.ammo).toEqual(ammo);
+  });
+
+  it('addAmmoUnchecked 可超 cap；一般 addAmmo 不可', () => {
+    const full: AmmoSlotState = { damageBonus: 1, drawBonus: 1 };
+    expect(addAmmo(full, BIG_SHOW_FREE_DAMAGE, BIG_SHOW_FREE_DRAW)).toBeNull();
+    expect(
+      addAmmoUnchecked(full, BIG_SHOW_FREE_DAMAGE, BIG_SHOW_FREE_DRAW),
+    ).toEqual({ damageBonus: 2, drawBonus: 2 });
+    expect(
+      addAmmo(full, 1, 1, { ignoreCap: true }),
+    ).toEqual({ damageBonus: 2, drawBonus: 2 });
   });
 });
