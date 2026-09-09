@@ -1,10 +1,14 @@
 /**
  * 騎士卡牌最小型別（計次旗標；沉默結算留給上層）。
+ * 定義表見 stubs.KNIGHT_CARD_DEFS（共用 CardDefinition）。
  */
 
 import type { Board } from '../../board/index.js';
 import type { Axial } from '../../hex/index.js';
 import type { CombatEvent } from '../../combat/index.js';
+import type { CardDefinition, CardKindTag } from '../types.js';
+
+export type { CardDefinition, CardKindTag };
 
 /** 騎士牌種 id。 */
 export type KnightCardId =

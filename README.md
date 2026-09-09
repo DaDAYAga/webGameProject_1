@@ -56,13 +56,24 @@
 
 ### core/cards/knight（攻擊＋衝鋒完成）
 
-騎士 PVE 純函式結算（handoff §8／§12 step 6）：
+騎士 PVE 純函式結算（handoff §8／§12 step 6；定義表對齊共用 `CardDefinition`）：
 - **攻擊** `resolveKnightAttack`：計次；對王鄰 1 → 2 傷；對 plain 系 crack／destroy；不可指定 punish／curse；拆老化傷王
 - **盾牌衝鋒** `resolveShieldCharge`：直線最多 2 格；撞未老化牆 → 停前格破碎並強制結束回合；撞老化牆 → 穿過拆掉＋王 1 傷＋結束回合；punish／王格不可進仍結束回合
 - 詛咒截停：`curseStop: 'stop' | 'absorbMax1'`（**UNRESOLVED**，預設 `stop`）
 - 信仰／護身／奉獻／不死：TODO stub 匯出 only
 
-不含槍手／法師牌、牌庫 UI、React。
+共用薄型別：`core/cards/types.ts`（`CardDefinition`／`CardKindTag`；非 tag engine）。
+
+### core/cards/gunner（射擊＋裝填完成）
+
+槍手 PVE 純函式結算（handoff §9 + 遠程修訂 2026-09-09b）：
+- **射擊** `resolveGunnerShot`：只打王、任意距離；`computeRangedDamageToBoss`；計次；套用裝填後**清空槽**
+- **裝填槽** `AmmoSlotState { damageBonus, drawBonus }` 合計 ≤ 2；跨回合直到射擊
+- **頑皮氣瓶** `resolvePlayfulBottle`：棄 1 射擊 → +1 傷
+- **胡鬧氣瓶** `resolveMischiefBottle`：棄 1 射擊 → +1 抽（射擊結算回傳 `drawFromAmmo`）
+- 大亂流／Power UP／大招：TODO stub only
+
+不含法師牌、牌庫 UI、React。
 
 ## 如何跑測試
 
@@ -76,4 +87,4 @@ npx vitest run
 
 ## 下一步
 
-實作 **槍手射擊＋裝填**（handoff §12 step 7；甜區／ammo 槽）。不要一次做 UI／完整牌庫。
+實作 **法師御風＋位面交換**（handoff §12 step 8；建議優先於剩餘槍手牌）。不要一次做 UI／完整牌庫。

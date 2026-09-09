@@ -30,5 +30,6 @@ export {
   resolveGuardStub,
   resolveDevotionStub,
   resolveUndyingStub,
+  KNIGHT_CARD_DEFS,
   makeKnightCard,
 } from './stubs.js';
