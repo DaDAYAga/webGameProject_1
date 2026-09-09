@@ -34,6 +34,16 @@
 
 不含回合、戰鬥、卡牌、React。
 
+### core/turn（完成）
+
+回合／對局 glue（handoff §12 step 4）：
+- 自訂行動隊列；跳過封印／出局（不抽、不出）
+- 行動者回合骨架：抽 1（stub）→ 移動點 ≤2 → 出 1 計次牌（旗標）→ `END_ACTOR_TURN`／`ADVANCE`
+- 可行動者皆結束 → `RoundEnded`；`punishEnabled` 且本輪王傷 0 → `PunishPlace` 意圖（不在此層鋪格）
+- 牆老化：`MatchState.aging` 計數；鋪設輪末登錄 0，再滿兩輪 → `WallAged`（開場／noAge 不進管線）
+
+不含戰鬥結算、真實牌庫、React。
+
 ## 如何跑測試
 
 安裝依賴後執行：
@@ -46,4 +56,4 @@ npx vitest run
 
 ## 下一步
 
-實作 **core/turn** 或戰鬥／遠程結算（甜區常數已在文件鎖定）。不要一次做 UI。
+實作 **core/combat**（有效傷才抽王牌；遠程甜區 ≤3、無擋線 −1）。不要一次做 UI。
