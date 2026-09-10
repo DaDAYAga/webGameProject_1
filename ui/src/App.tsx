@@ -1,8 +1,9 @@
 /**
  * 學習筆記：
- * 1) React 元件 = 畫面上一塊（手牌、日誌）；狀態用 useState。
+ * 1) React 元件 = 畫面上一塊（棋盤、手牌、日誌）；狀態用 useState。
  * 2) 點牌 = 呼叫已寫好的 core 純函式（resolveGunnerShot / resolveMagicArrow）。
- * 3) UI 不算規則：傷害／事件皆由 core 回傳，這裡只顯示文字。
+ * 3) 點棋盤格 = 只記 axial 座標（尚無移動規則）；棋盤資料來自 createOpeningBoard。
+ * 4) UI 不算規則：傷害／事件皆由 core 回傳，這裡只顯示文字。
  */
 import { useMemo, useState } from 'react';
 import {
@@ -16,6 +17,14 @@ import {
   makeMageCard,
   resolveMagicArrow,
 } from '@core/cards/mage/index.js';
+import {
+  BOSS_HEX,
+  createOpeningBoard,
+  getTile,
+  hexKey,
+} from '@core/board/index.js';
+import { equals, type Axial } from '@core/hex/index.js';
+import { BoardCanvas } from './BoardCanvas';
 import { Hand, type HandCard } from './Hand';
 
 type DemoClass = 'gunner' | 'mage';
@@ -70,9 +79,12 @@ function formatEvents(events: ReadonlyArray<{ type: string }>): string {
 export function App() {
   const [demo, setDemo] = useState<DemoClass>('gunner');
   const [log, setLog] = useState<string[]>([
-    '薄 UI demo：點「射擊」或「魔法箭」會呼叫 core 結算；其餘牌顯示尚未串結算。',
+    '薄 UI demo：上方棋盤來自 createOpeningBoard；點「射擊」或「魔法箭」會呼叫 core 結算。',
   ]);
   const [toast, setToast] = useState('');
+
+  // 與 BoardCanvas 同一開場盤，方便點格時描述地形（不重複造規則）
+  const openingBoard = useMemo(() => createOpeningBoard(), []);
 
   const hand = useMemo(
     () => (demo === 'gunner' ? buildGunnerHand() : buildMageHand()),
@@ -81,6 +93,18 @@ export function App() {
 
   function pushLog(line: string) {
     setLog((prev) => [...prev, line]);
+  }
+
+  function onHexClick(hex: Axial) {
+    const tile = getTile(openingBoard, hex);
+    const tileDesc = tile
+      ? `${tile.kind}${tile.aged ? '+aged' : ''}`
+      : equals(hex, BOSS_HEX)
+        ? '王格'
+        : '空格';
+    const line = `【點格】axial=(${hex.q},${hex.r}) key=${hexKey(hex)} → ${tileDesc}`;
+    pushLog(line);
+    setToast(`點到 (${hex.q},${hex.r})：${tileDesc}`);
   }
 
   function onPlay(card: HandCard) {
@@ -121,11 +145,13 @@ export function App() {
   return (
     <div className="app">
       <header>
-        <h1>薄手牌 UI（core 結算 demo）</h1>
+        <h1>薄 UI（棋盤 + 手牌 demo）</h1>
         <p className="muted">
-          攻擊者固定 (2,0) 對王；無完整對局狀態。規則在 core，畫面只負責呼叫與顯示。
+          棋盤：core 開場牆；手牌：點射擊／魔法箭呼叫 core。尚無完整對局 loop。
         </p>
       </header>
+
+      <BoardCanvas onHexClick={onHexClick} />
 
       <div>
         <span className="tab">

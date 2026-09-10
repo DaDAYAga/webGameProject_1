@@ -20,7 +20,7 @@ body {
 }
 
 .app {
-  max-width: 720px;
+  max-width: 920px;
   margin: 0 auto;
   padding: 1.25rem 1rem 2rem;
   display: flex;
@@ -138,4 +138,35 @@ header h1 {
 
 .log .empty {
   color: #6b7385;
+}
+
+
+.board-panel {
+  border: 1px solid #2e3648;
+  border-radius: 10px;
+  background: #171b24;
+  overflow: hidden;
+  padding-bottom: 0.75rem;
+}
+
+.board-panel h2 {
+  margin: 0;
+  padding: 0.55rem 0.75rem;
+  font-size: 0.95rem;
+  background: #1e2430;
+  border-bottom: 1px solid #2e3648;
+}
+
+.board-hint {
+  margin: 0.5rem 0.75rem 0.35rem;
+  font-size: 0.82rem;
+}
+
+.board-canvas {
+  display: block;
+  margin: 0 auto;
+  max-width: 100%;
+  height: auto;
+  cursor: crosshair;
+  background: #12141a;
 }
