@@ -1,9 +1,9 @@
 /**
  * 學習筆記（六角 Canvas 棋盤）：
- * 1) 規則在 core：開場牆用 createOpeningBoard；地圖範圍用 DEFAULT_MAP_RADIUS + listMapHexes。
- * 2) 畫面只負責「axial → 像素」畫六角形；點一下回傳座標給 App 寫進日誌。
- * 3) 取向：flat-top（平頂）— 參考 Red Blob Games「Hex to pixel」公式。
- *    為什麼選 flat-top：與常見棋盤示意一致；之後若要 pointy-top 只要改公式常數。
+ * 1) 規則在 core：開場牆用 createOpeningBoard；站格用 canStandAt；地圖用 DEFAULT_MAP_RADIUS。
+ * 2) 畫面只負責「axial → 像素」；點格回傳座標給 App（移動／日誌）。
+ * 3) unitHex 由 App 傳入 → 畫單位標記（demo 一顆）。
+ * 4) 取向：flat-top（平頂）— Red Blob Games「Hex to pixel」。
  *
  * Red Blob flat-top（size = 中心到頂邊距離）：
  *   x = size * (3/2 * q)
@@ -12,7 +12,6 @@
 import { useEffect, useMemo, useRef, type MouseEvent } from 'react';
 import {
   BOSS_HEX,
-  createOpeningBoard,
   getTile,
   hexKey,
   type Board,
@@ -25,7 +24,11 @@ import {
 } from '@core/enclosure/index.js';
 
 type BoardCanvasProps = {
-  /** 點到一格時呼叫；App 可寫進事件日誌。 */
+  /** 與 App 共用的開場盤（靜態 v1 即可）。 */
+  board: Board;
+  /** 目前 demo 單位所在格；畫標記用。 */
+  unitHex: Axial;
+  /** 點到一格時呼叫；App 決定能否移動。 */
   onHexClick?: (hex: Axial) => void;
 };
 
@@ -94,7 +97,8 @@ function fillForTile(tile: Tile): string {
   return '#2a3140';
 }
 
-function strokeForHex(hex: Axial): string {
+function strokeForHex(hex: Axial, unitHex: Axial): string {
+  if (equals(hex, unitHex)) return '#7ec8ff';
   if (equals(hex, BOSS_HEX)) return '#e8a0a0';
   return '#3d4658';
 }
@@ -108,11 +112,10 @@ function labelForHex(hex: Axial, board: Board): string {
   return '';
 }
 
-/** 畫一張開場棋盤：半徑 DEFAULT_MAP_RADIUS、王在 (0,0)、六鄰開場牆。 */
-export function BoardCanvas({ onHexClick }: BoardCanvasProps) {
+/** 畫一張開場棋盤：半徑 DEFAULT_MAP_RADIUS、王在 (0,0)、單位標記。 */
+export function BoardCanvas({ board, unitHex, onHexClick }: BoardCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
-  const board = useMemo(() => createOpeningBoard(), []);
   const hexes = useMemo(
     () => listMapHexes({ radius: DEFAULT_MAP_RADIUS }),
     [],
@@ -160,8 +163,8 @@ export function BoardCanvas({ onHexClick }: BoardCanvasProps) {
       ctx.closePath();
       ctx.fillStyle = fillForHex(h, board);
       ctx.fill();
-      ctx.strokeStyle = strokeForHex(h);
-      ctx.lineWidth = equals(h, BOSS_HEX) ? 2 : 1;
+      ctx.strokeStyle = strokeForHex(h, unitHex);
+      ctx.lineWidth = equals(h, BOSS_HEX) || equals(h, unitHex) ? 2 : 1;
       ctx.stroke();
 
       const label = labelForHex(h, board);
@@ -171,7 +174,7 @@ export function BoardCanvas({ onHexClick }: BoardCanvasProps) {
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillText(label, cx, cy);
-      } else if (distance(h, BOSS_HEX) <= 2) {
+      } else if (distance(h, BOSS_HEX) <= 2 && !equals(h, unitHex)) {
         // 近中心空格標座標，方便對照學習（外圈省略以免雜亂）
         ctx.fillStyle = '#6b7385';
         ctx.font = '9px ui-monospace, Consolas, monospace';
@@ -180,7 +183,26 @@ export function BoardCanvas({ onHexClick }: BoardCanvasProps) {
         ctx.fillText(`${h.q},${h.r}`, cx, cy);
       }
     }
-  }, [board, hexes, layout]);
+
+    // 單位標記：圓點 + 「我」（demo 一顆；位置由 App 的 unitHex 控制）
+    {
+      const { x, y } = axialToPixel(unitHex, HEX_SIZE);
+      const cx = layout.originX + x;
+      const cy = layout.originY + y;
+      ctx.beginPath();
+      ctx.arc(cx, cy, HEX_SIZE * 0.38, 0, Math.PI * 2);
+      ctx.fillStyle = '#3d7ea6';
+      ctx.fill();
+      ctx.strokeStyle = '#b8e0ff';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.fillStyle = '#f0f7ff';
+      ctx.font = 'bold 12px "Segoe UI", "Noto Sans TC", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('我', cx, cy);
+    }
+  }, [board, hexes, layout, unitHex]);
 
   function handleClick(e: MouseEvent<HTMLCanvasElement>) {
     const canvas = canvasRef.current;
@@ -203,8 +225,8 @@ export function BoardCanvas({ onHexClick }: BoardCanvasProps) {
     <section className="board-panel" aria-label="六角棋盤">
       <h2>開場棋盤（Canvas）</h2>
       <p className="muted board-hint">
-        半徑 {DEFAULT_MAP_RADIUS} · flat-top · 王 (0,0) · 開場牆 {wallCount} 格（
-        {hexKey({ q: 0, r: -1 })} 等六鄰，plain_broken+aged）· 點格寫入日誌
+        半徑 {DEFAULT_MAP_RADIUS} · flat-top · 王 (0,0) · 單位 ({unitHex.q},{unitHex.r}) ·
+        開場牆 {wallCount} 格（{hexKey({ q: 0, r: -1 })} 等）· 點鄰格移動（demo）
       </p>
       <canvas
         ref={canvasRef}
@@ -213,7 +235,7 @@ export function BoardCanvas({ onHexClick }: BoardCanvasProps) {
         height={layout.height}
         onClick={handleClick}
         role="img"
-        aria-label={`六角地圖半徑 ${DEFAULT_MAP_RADIUS}，王在中央`}
+        aria-label={`六角地圖半徑 ${DEFAULT_MAP_RADIUS}，單位在 (${unitHex.q},${unitHex.r})`}
       />
     </section>
   );
