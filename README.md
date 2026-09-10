@@ -11,7 +11,7 @@
 - 向量：add / subtract / scale / equals
 - 鄰居：neighbors（標準軸向 DIR，恰好 6 格）
 - 距離：distance（立方距離）
-- 縮距扇形 shrinkingFanCells：兩點間最短路徑廊道
+- 縮距扇形 shrinkingFanCells：兩點間**純幾何**最短路徑廊道（不含障礙；繞牆請用 board/path）
 
 此層不含棋盤、回合、戰鬥、卡牌、React UI、AI。
 
@@ -22,6 +22,9 @@
 - 破碎／拆牆（plain → broken → 移除）
 - 站格判定（不可站牆／王格等）
 - 推牆（kind 允許時）
+- **可站最短路徑** `shortestPath(board, from, toward, options?)`：BFS + `canStandAt`（起點不重驗；目標預設須可站）
+- 輔助：`shortestPathLength`／`isOnShortestStandablePath`；廊道過濾 `standableShrinkingFanCells`（**非繞牆**，僅幾何扇形∩可站）
+- 分層：`core/hex/shrinkingFanCells`＝純幾何；`core/board/path`＝看障礙的真實最短路徑
 - 不含包圍、回合、戰鬥、卡牌、React
 
 ### core/enclosure（完成）

@@ -1,10 +1,14 @@
 /**
  * 棋盤地形層（core/board）。
- * 放置／破碎／站格／推；不含包圍、回合、戰鬥。
+ * 放置／破碎／站格／推／可站最短路徑；不含包圍、回合、戰鬥。
  */
 
 export type { TerrainKind, Tile, Board, TerrainHitResult } from './types.js';
 export type { OpeningBoardOptions } from './board.js';
+export type {
+  ShortestPathOptions,
+  StandableShrinkingFanOptions,
+} from './path.js';
 
 export {
   kindCountsForEnclosure,
@@ -32,3 +36,10 @@ export {
   pushTerrain,
   absorbCurseAt,
 } from './board.js';
+
+export {
+  shortestPath,
+  shortestPathLength,
+  isOnShortestStandablePath,
+  standableShrinkingFanCells,
+} from './path.js';
