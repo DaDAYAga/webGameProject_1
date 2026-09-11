@@ -4,6 +4,8 @@
  * 2) 點牌 = 呼叫 core resolve*；attacker = 目前 unitHex。
  * 3) 點棋盤 = demo 移動：只能走到「鄰格且 canStandAt」。
  * 4) UI 不算規則：傷害／站格／棄牌皆由 core 回傳，這裡只顯示並同步 state。
+ * 5) 回合殼（UI-only）：movesLeft／actionsLeft 常數可調；結束回合重置。
+ *    真實 core/turn 命名空間之後再接，此處僅薄 demo 額度。
  */
 import { useMemo, useState } from 'react';
 import {
@@ -51,6 +53,14 @@ type DemoClass = 'gunner' | 'mage' | 'knight';
  * (2,0) 在開場六鄰牆外，適合遠程甜區示範。
  */
 const START_UNIT_HEX: Axial = { q: 2, r: 0 };
+
+/**
+ * 薄 UI 回合額度（可調常數；非 core/turn）。
+ * - movesLeft：鄰格移動消耗 1
+ * - actionsLeft：countsTowardAction 的成功出牌消耗 1（增幅／氣瓶不計次）
+ */
+const TURN_MOVES_PER_ROUND = 1;
+const TURN_ACTIONS_PER_ROUND = 1;
 
 /** 已串結算的牌種（薄 demo）。 */
 const WIRED_IDS = new Set([
@@ -181,6 +191,20 @@ function bottleFailReason(reason: string | undefined): string {
   return reason ?? '未知失敗';
 }
 
+/** 依職業定義表查 countsTowardAction（薄殼用；真實 turn 之後再接）。 */
+function lookupCountsTowardAction(demo: DemoClass, cardId: string): boolean {
+  if (demo === 'gunner') {
+    const def = GUNNER_CARD_DEFS[cardId as GunnerCardId];
+    return def?.countsTowardAction ?? false;
+  }
+  if (demo === 'mage') {
+    const def = MAGE_CARD_DEFS[cardId as MageCardId];
+    return def?.countsTowardAction ?? false;
+  }
+  const def = KNIGHT_CARD_DEFS[cardId as KnightCardId];
+  return def?.countsTowardAction ?? false;
+}
+
 export function App() {
   const [demo, setDemo] = useState<DemoClass>('gunner');
   const [unitHex, setUnitHex] = useState<Axial>(START_UNIT_HEX);
@@ -193,9 +217,13 @@ export function App() {
   // 騎士拆牆會改盤面 → lift board
   const [board, setBoard] = useState<Board>(() => createOpeningBoard());
   const [log, setLog] = useState<string[]>([
-    '薄 UI：氣瓶／增幅→箭／騎士鄰格近戰已串；切職業會重建手牌。',
+    '薄 UI：氣瓶／增幅→箭／騎士近戰已串；薄回合殼（移動1／行動1）。點「結束回合」重置額度。',
   ]);
   const [toast, setToast] = useState('');
+  // 薄回合殼：僅 UI 額度；真實 core/turn 之後再接
+  const [round, setRound] = useState(1);
+  const [movesLeft, setMovesLeft] = useState(TURN_MOVES_PER_ROUND);
+  const [actionsLeft, setActionsLeft] = useState(TURN_ACTIONS_PER_ROUND);
 
   const ammoHint = useMemo(
     () => `裝填 dmg+${ammo.damageBonus} draw+${ammo.drawBonus}`,
@@ -206,14 +234,42 @@ export function App() {
     setLog((prev) => [...prev, line]);
   }
 
-  /** 切職業：重建手牌並清 buff／裝填（棋盤與單位保留）。 */
+  /** 切職業：重建手牌並清 buff／裝填（棋盤與單位保留；回合額度重置）。 */
   function switchDemo(next: DemoClass) {
     setDemo(next);
     setHand(buildHand(next));
     setAmmo(EMPTY_AMMO_SLOT);
     setAmplifiedPending(false);
-    pushLog(`【切換】→ ${demoLabel(next)}（手牌重建）`);
+    setMovesLeft(TURN_MOVES_PER_ROUND);
+    setActionsLeft(TURN_ACTIONS_PER_ROUND);
+    pushLog(`【切換】→ ${demoLabel(next)}（手牌重建；移動／行動額度重置）`);
     setToast(`切換 ${demoLabel(next)}`);
+  }
+
+  /**
+   * 結束回合（UI-only）：重置移動／行動額度、清增幅待用、保留裝填、round++。
+   * 真實老化／抽牌／敵人回合之後再接 core/turn。
+   */
+  function endTurn() {
+    const nextRound = round + 1;
+    setRound(nextRound);
+    setMovesLeft(TURN_MOVES_PER_ROUND);
+    setActionsLeft(TURN_ACTIONS_PER_ROUND);
+    setAmplifiedPending(false);
+    // 裝填保留（薄 demo：不清 ammo）
+    pushLog(
+      `【結束回合】→ round ${nextRound}` +
+        `（移動 ${TURN_MOVES_PER_ROUND}／行動 ${TURN_ACTIONS_PER_ROUND}；增幅已清；裝填保留）`,
+    );
+    setToast(
+      `第 ${nextRound} 回合：移動 ${TURN_MOVES_PER_ROUND} · 行動 ${TURN_ACTIONS_PER_ROUND}`,
+    );
+  }
+
+  /** 成功出計次牌後扣 1 行動。 */
+  function spendActionIfCounted(cardId: string) {
+    if (!lookupCountsTowardAction(demo, cardId)) return;
+    setActionsLeft((n) => Math.max(0, n - 1));
   }
 
   /** 出牌後從手牌移除（成功結算時）。 */
@@ -239,6 +295,13 @@ export function App() {
       return;
     }
 
+    if (movesLeft <= 0) {
+      const msg = '本回合移動已用完';
+      pushLog(`${base} → ${msg}（點「結束回合」重置）`);
+      setToast(msg);
+      return;
+    }
+
     const step = distance(unitHex, hex);
     if (step !== 1) {
       const msg = '此 demo 一次只走鄰格';
@@ -256,15 +319,26 @@ export function App() {
 
     const from = unitHex;
     setUnitHex(hex);
+    setMovesLeft((n) => Math.max(0, n - 1));
+    const left = movesLeft - 1;
     const line =
       `【移動】(${from.q},${from.r}) → (${hex.q},${hex.r})` +
-      `（鄰格一步 · canStandAt OK）`;
+      `（鄰格一步 · canStandAt OK · 剩餘移動 ${left}）`;
     pushLog(line);
-    setToast(`移動到 (${hex.q},${hex.r})`);
+    setToast(`移動到 (${hex.q},${hex.r})（剩餘移動 ${left}）`);
   }
 
   function onPlay(card: HandCard) {
     const attacker = unitHex;
+    const counts = lookupCountsTowardAction(demo, card.cardId);
+
+    // 計次牌且行動額度用完 → 擋（增幅／氣瓶 countsTowardAction=false 不擋）
+    if (counts && actionsLeft <= 0) {
+      const msg = '本回合行動已用完';
+      pushLog(`【${card.name}】→ ${msg}（點「結束回合」重置）`);
+      setToast(msg);
+      return;
+    }
 
     // —— 槍手：射擊（吃裝填後清槽）——
     if (card.cardId === 'shot') {
@@ -281,9 +355,11 @@ export function App() {
         ` / drawFromAmmo=${result.drawFromAmmo}` +
         ` / events=${formatEvents(result.events)}`;
       pushLog(line);
+      spendActionIfCounted(card.cardId);
       setToast(
         `射擊：王傷 ${result.bossDamage}` +
-          (result.drawFromAmmo > 0 ? `（應抽 ${result.drawFromAmmo}）` : ''),
+          (result.drawFromAmmo > 0 ? `（應抽 ${result.drawFromAmmo}）` : '') +
+          `（剩餘行動 ${counts ? actionsLeft - 1 : actionsLeft}）`,
       );
       return;
     }
@@ -309,9 +385,11 @@ export function App() {
         ` draw+${result.ammo.drawBonus}` +
         ` / 棄射擊=${result.discardedShotId}` +
         ` / events=${formatEvents(result.events)}`;
+      // 氣瓶 countsTowardAction=false → 不扣 actionsLeft
       pushLog(line);
       setToast(
-        `${card.name}：裝填 dmg+${result.ammo.damageBonus} draw+${result.ammo.drawBonus}`,
+        `${card.name}：裝填 dmg+${result.ammo.damageBonus} draw+${result.ammo.drawBonus}` +
+          '（不計次）',
       );
       return;
     }
@@ -321,11 +399,13 @@ export function App() {
       const result = resolveAmplify({ hand: toMageInstances(hand) });
       setAmplifiedPending(result.amplifiedPending);
       removeFromHand(card.instanceId);
+      // 增幅 countsTowardAction=false → 不扣 actionsLeft
       pushLog(
         `【強能增幅】armed → 下一張招 amplified` +
-          ` / events=${formatEvents(result.events)}`,
+          ` / events=${formatEvents(result.events)}` +
+          '（不計次）',
       );
-      setToast('強能增幅：下一張魔法箭會吃加成');
+      setToast('強能增幅：下一張魔法箭會吃加成（不計次）');
       return;
     }
 
@@ -345,9 +425,11 @@ export function App() {
         ` / amplified=${result.amplified ? '是' : '否'}` +
         ` / events=${formatEvents(result.events)}`;
       pushLog(line);
+      spendActionIfCounted(card.cardId);
       setToast(
         `魔法箭：王傷 ${result.bossDamage}` +
-          (usedAmp ? '（已增幅）' : ''),
+          (usedAmp ? '（已增幅）' : '') +
+          `（剩餘行動 ${counts ? actionsLeft - 1 : actionsLeft}）`,
       );
       return;
     }
@@ -381,6 +463,7 @@ export function App() {
         setBoard(result.board);
       }
       removeFromHand(card.instanceId);
+      spendActionIfCounted(card.cardId);
       const tgtDesc = equals(target, BOSS_HEX)
         ? '王'
         : `牆(${target.q},${target.r})`;
@@ -398,7 +481,8 @@ export function App() {
       pushLog(line);
       setToast(
         result.ok
-          ? `攻擊 ${tgtDesc}：王傷 ${result.bossDamage}`
+          ? `攻擊 ${tgtDesc}：王傷 ${result.bossDamage}` +
+            `（剩餘行動 ${counts ? actionsLeft - 1 : actionsLeft}）`
           : `攻擊失敗：${result.reason ?? '未知'}`,
       );
       return;
@@ -414,8 +498,8 @@ export function App() {
       <header>
         <h1>薄 UI（棋盤移動 + 手牌 demo）</h1>
         <p className="muted">
-          氣瓶棄射擊裝填、增幅餵下一箭、騎士鄰王／鄰牆近戰；切職業重建手牌。尚無完整對局
-          loop。
+          氣瓶棄射擊裝填、增幅餵下一箭、騎士鄰王／鄰牆近戰；薄回合殼（移動／行動額度）。
+          真實 core/turn 之後再接。
         </p>
       </header>
 
@@ -424,6 +508,9 @@ export function App() {
       <div>
         <span className="tab">
           {demoLabel(demo)}
+          {' · '}round {round}
+          {' · '}移動 {movesLeft}/{TURN_MOVES_PER_ROUND}
+          {' · '}行動 {actionsLeft}/{TURN_ACTIONS_PER_ROUND}
           {' · '}單位 ({unitHex.q},{unitHex.r})
           {demo === 'gunner' ? ` · ${ammoHint}` : ''}
           {demo === 'mage' && amplifiedPending ? ' · 增幅待用' : ''}
@@ -436,6 +523,9 @@ export function App() {
         </button>{' '}
         <button type="button" onClick={() => switchDemo('knight')}>
           騎士
+        </button>{' '}
+        <button type="button" onClick={endTurn}>
+          結束回合
         </button>
       </div>
 
