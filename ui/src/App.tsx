@@ -1,10 +1,9 @@
 /**
  * 學習筆記：
  * 1) React 元件 = 畫面上一塊（棋盤、手牌、日誌）；狀態用 useState。
- * 2) 點牌 = 呼叫 core（resolveGunnerShot / resolveMagicArrow），attacker = 目前 unitHex。
- * 3) 點棋盤 = demo 移動：只能走到「鄰格且 canStandAt」；遠格／牆／王格寫日誌拒絕。
- *    ※ 這是教學用一步移動，不是真實 AP／路徑尋路。
- * 4) UI 不算規則：傷害／站格皆由 core 回傳或判定，這裡只顯示文字。
+ * 2) 點牌 = 呼叫 core resolve*；attacker = 目前 unitHex。
+ * 3) 點棋盤 = demo 移動：只能走到「鄰格且 canStandAt」。
+ * 4) UI 不算規則：傷害／站格／棄牌皆由 core 回傳，這裡只顯示並同步 state。
  */
 import { useMemo, useState } from 'react';
 import {
@@ -12,24 +11,40 @@ import {
   GUNNER_CARD_DEFS,
   makeGunnerCard,
   resolveGunnerShot,
+  resolveMischiefBottle,
+  resolvePlayfulBottle,
+  type AmmoSlotState,
+  type GunnerCardId,
+  type GunnerCardInstance,
 } from '@core/cards/gunner/index.js';
 import {
   MAGE_CARD_DEFS,
   makeMageCard,
+  resolveAmplify,
   resolveMagicArrow,
+  type MageCardId,
+  type MageCardInstance,
 } from '@core/cards/mage/index.js';
+import {
+  KNIGHT_CARD_DEFS,
+  makeKnightCard,
+  resolveKnightAttack,
+  type KnightCardId,
+} from '@core/cards/knight/index.js';
 import {
   BOSS_HEX,
   canStandAt,
   createOpeningBoard,
   getTile,
   hexKey,
+  kindAllowsCrack,
+  type Board,
 } from '@core/board/index.js';
-import { distance, equals, type Axial } from '@core/hex/index.js';
+import { distance, equals, neighbors, type Axial } from '@core/hex/index.js';
 import { BoardCanvas } from './BoardCanvas';
 import { Hand, type HandCard } from './Hand';
 
-type DemoClass = 'gunner' | 'mage';
+type DemoClass = 'gunner' | 'mage' | 'knight';
 
 /**
  * 開場單位位置：距王 2、空格、可站。
@@ -37,14 +52,27 @@ type DemoClass = 'gunner' | 'mage';
  */
 const START_UNIT_HEX: Axial = { q: 2, r: 0 };
 
+/** 已串結算的牌種（薄 demo）。 */
+const WIRED_IDS = new Set([
+  'shot',
+  'playful_bottle',
+  'mischief_bottle',
+  'magic_arrow',
+  'amplify',
+  'attack',
+]);
+
 function buildGunnerHand(): HandCard[] {
-  const ids = [
+  // 多放幾張射擊，氣瓶才能棄射擊裝填
+  const ids: GunnerCardId[] = [
+    'shot',
+    'shot',
     'shot',
     'playful_bottle',
     'mischief_bottle',
     'turbulence',
     'power_up',
-  ] as const;
+  ];
   return ids.map((cardId, i) => {
     const inst = makeGunnerCard(cardId, `g-${i}-${cardId}`);
     const def = GUNNER_CARD_DEFS[cardId];
@@ -52,19 +80,20 @@ function buildGunnerHand(): HandCard[] {
       instanceId: inst.instanceId,
       cardId,
       name: def.name,
-      wired: cardId === 'shot',
+      wired: WIRED_IDS.has(cardId),
     };
   });
 }
 
 function buildMageHand(): HandCard[] {
-  const ids = [
+  const ids: MageCardId[] = [
+    'magic_arrow',
     'magic_arrow',
     'amplify',
     'wind',
     'focus',
     'barrier',
-  ] as const;
+  ];
   return ids.map((cardId, i) => {
     const inst = makeMageCard(cardId, `m-${i}-${cardId}`);
     const def = MAGE_CARD_DEFS[cardId];
@@ -72,9 +101,41 @@ function buildMageHand(): HandCard[] {
       instanceId: inst.instanceId,
       cardId,
       name: def.name,
-      wired: cardId === 'magic_arrow',
+      wired: WIRED_IDS.has(cardId),
     };
   });
+}
+
+function buildKnightHand(): HandCard[] {
+  const ids: KnightCardId[] = [
+    'attack',
+    'attack',
+    'faith',
+    'taunt',
+    'devotion',
+  ];
+  return ids.map((cardId, i) => {
+    const inst = makeKnightCard(cardId, `k-${i}-${cardId}`);
+    const def = KNIGHT_CARD_DEFS[cardId];
+    return {
+      instanceId: inst.instanceId,
+      cardId,
+      name: def.name,
+      wired: WIRED_IDS.has(cardId),
+    };
+  });
+}
+
+function buildHand(demo: DemoClass): HandCard[] {
+  if (demo === 'gunner') return buildGunnerHand();
+  if (demo === 'mage') return buildMageHand();
+  return buildKnightHand();
+}
+
+function demoLabel(demo: DemoClass): string {
+  if (demo === 'gunner') return '槍手 demo';
+  if (demo === 'mage') return '法師 demo';
+  return '騎士 demo';
 }
 
 function formatEvents(events: ReadonlyArray<{ type: string }>): string {
@@ -82,38 +143,90 @@ function formatEvents(events: ReadonlyArray<{ type: string }>): string {
   return events.map((e) => e.type).join(', ');
 }
 
-function describeHex(board: ReturnType<typeof createOpeningBoard>, hex: Axial): string {
+function describeHex(board: Board, hex: Axial): string {
   const tile = getTile(board, hex);
   if (tile) return `${tile.kind}${tile.aged ? '+aged' : ''}`;
   if (equals(hex, BOSS_HEX)) return '王格';
   return '空格';
 }
 
+/** HandCard → core 槍手實例（氣瓶／棄牌要 instanceId）。 */
+function toGunnerInstances(hand: HandCard[]): GunnerCardInstance[] {
+  return hand.map((c) => {
+    const cardId = c.cardId as GunnerCardId;
+    return {
+      instanceId: c.instanceId,
+      cardId,
+      countsTowardAction: GUNNER_CARD_DEFS[cardId].countsTowardAction,
+    };
+  });
+}
+
+/** HandCard → core 法師實例（增幅不棄牌，仍要交 hand）。 */
+function toMageInstances(hand: HandCard[]): MageCardInstance[] {
+  return hand.map((c) => {
+    const cardId = c.cardId as MageCardId;
+    return {
+      instanceId: c.instanceId,
+      cardId,
+      countsTowardAction: MAGE_CARD_DEFS[cardId].countsTowardAction,
+    };
+  });
+}
+
+/** 氣瓶失敗原因 → 短中文。 */
+function bottleFailReason(reason: string | undefined): string {
+  if (reason === 'no_shot_to_discard') return '手牌無射擊可棄';
+  if (reason === 'ammo_slot_full') return '裝填槽已滿（合計最多 2）';
+  return reason ?? '未知失敗';
+}
+
 export function App() {
   const [demo, setDemo] = useState<DemoClass>('gunner');
   const [unitHex, setUnitHex] = useState<Axial>(START_UNIT_HEX);
+  // 手牌 lift：出牌／氣瓶棄射擊會移除；切 tab 重建
+  const [hand, setHand] = useState<HandCard[]>(() => buildGunnerHand());
+  // 槍手裝填槽（氣瓶寫入、射擊結算清空）
+  const [ammo, setAmmo] = useState<AmmoSlotState>(EMPTY_AMMO_SLOT);
+  // 法師增幅：下一張招帶 amplified；薄 demo 只餵給魔法箭
+  const [amplifiedPending, setAmplifiedPending] = useState(false);
+  // 騎士拆牆會改盤面 → lift board
+  const [board, setBoard] = useState<Board>(() => createOpeningBoard());
   const [log, setLog] = useState<string[]>([
-    '薄 UI demo：棋盤單位可一步走鄰格；射擊／魔法箭以目前「我」格為 attacker。',
+    '薄 UI：氣瓶／增幅→箭／騎士鄰格近戰已串；切職業會重建手牌。',
   ]);
   const [toast, setToast] = useState('');
 
-  // v1 棋盤靜態（開場牆不因移動改變）；之後若要拆牆再 lift 成 useState
-  const board = useMemo(() => createOpeningBoard(), []);
-
-  const hand = useMemo(
-    () => (demo === 'gunner' ? buildGunnerHand() : buildMageHand()),
-    [demo],
+  const ammoHint = useMemo(
+    () => `裝填 dmg+${ammo.damageBonus} draw+${ammo.drawBonus}`,
+    [ammo],
   );
 
   function pushLog(line: string) {
     setLog((prev) => [...prev, line]);
   }
 
+  /** 切職業：重建手牌並清 buff／裝填（棋盤與單位保留）。 */
+  function switchDemo(next: DemoClass) {
+    setDemo(next);
+    setHand(buildHand(next));
+    setAmmo(EMPTY_AMMO_SLOT);
+    setAmplifiedPending(false);
+    pushLog(`【切換】→ ${demoLabel(next)}（手牌重建）`);
+    setToast(`切換 ${demoLabel(next)}`);
+  }
+
+  /** 出牌後從手牌移除（成功結算時）。 */
+  function removeFromHand(...instanceIds: string[]) {
+    const drop = new Set(instanceIds);
+    setHand((prev) => prev.filter((c) => !drop.has(c.instanceId)));
+  }
+
   /**
    * Demo 移動：點擊目標格。
    * - 同格：略過
-   * - 非鄰格：日誌「此 demo 一次只走鄰格」（非真實 AP／A*）
-   * - 鄰格但 !canStandAt（牆／王等）：拒絕並說明
+   * - 非鄰格：日誌「此 demo 一次只走鄰格」
+   * - 鄰格但 !canStandAt：拒絕
    * - 鄰格且可站：更新 unitHex
    */
   function onHexClick(hex: Axial) {
@@ -151,35 +264,143 @@ export function App() {
   }
 
   function onPlay(card: HandCard) {
-    // 出牌用目前單位格當 attacker（不再 hardcode {q:2,r:0}）
     const attacker = unitHex;
 
+    // —— 槍手：射擊（吃裝填後清槽）——
     if (card.cardId === 'shot') {
       const result = resolveGunnerShot({
         attacker,
-        ammo: EMPTY_AMMO_SLOT,
+        ammo,
       });
+      setAmmo(result.ammo);
+      removeFromHand(card.instanceId);
       const line =
         `【射擊】attacker=(${attacker.q},${attacker.r}) → ` +
         `bossDamage=${result.bossDamage}` +
         ` / 甜區=${result.inSweetZone ? '是' : '否'}` +
+        ` / drawFromAmmo=${result.drawFromAmmo}` +
         ` / events=${formatEvents(result.events)}`;
       pushLog(line);
-      setToast(`射擊結算：王傷 ${result.bossDamage}（自 (${attacker.q},${attacker.r})）`);
+      setToast(
+        `射擊：王傷 ${result.bossDamage}` +
+          (result.drawFromAmmo > 0 ? `（應抽 ${result.drawFromAmmo}）` : ''),
+      );
       return;
     }
 
+    // —— 槍手：頑皮／胡鬧氣瓶（需棄 1 射擊）——
+    if (card.cardId === 'playful_bottle' || card.cardId === 'mischief_bottle') {
+      const input = { ammo, hand: toGunnerInstances(hand) };
+      const result =
+        card.cardId === 'playful_bottle'
+          ? resolvePlayfulBottle(input)
+          : resolveMischiefBottle(input);
+      if (!result.ok) {
+        const why = bottleFailReason(result.reason);
+        pushLog(`【${card.name}】失敗：${why}`);
+        setToast(`${card.name} 失敗：${why}`);
+        return;
+      }
+      setAmmo(result.ammo);
+      // core 已從 hand 棄射擊；氣瓶本身由上層移除
+      removeFromHand(card.instanceId, result.discardedShotId ?? '');
+      const line =
+        `【${card.name}】OK → 裝填 dmg+${result.ammo.damageBonus}` +
+        ` draw+${result.ammo.drawBonus}` +
+        ` / 棄射擊=${result.discardedShotId}` +
+        ` / events=${formatEvents(result.events)}`;
+      pushLog(line);
+      setToast(
+        `${card.name}：裝填 dmg+${result.ammo.damageBonus} draw+${result.ammo.drawBonus}`,
+      );
+      return;
+    }
+
+    // —— 法師：強能增幅（不棄牌；下一招 amplified）——
+    if (card.cardId === 'amplify') {
+      const result = resolveAmplify({ hand: toMageInstances(hand) });
+      setAmplifiedPending(result.amplifiedPending);
+      removeFromHand(card.instanceId);
+      pushLog(
+        `【強能增幅】armed → 下一張招 amplified` +
+          ` / events=${formatEvents(result.events)}`,
+      );
+      setToast('強能增幅：下一張魔法箭會吃加成');
+      return;
+    }
+
+    // —— 法師：魔法箭（吃 amplifiedPending 後清旗）——
     if (card.cardId === 'magic_arrow') {
+      const usedAmp = amplifiedPending;
       const result = resolveMagicArrow({
         attacker,
+        amplified: usedAmp,
       });
+      setAmplifiedPending(false);
+      removeFromHand(card.instanceId);
       const line =
         `【魔法箭】attacker=(${attacker.q},${attacker.r}) → ` +
         `bossDamage=${result.bossDamage}` +
         ` / 甜區=${result.inSweetZone ? '是' : '否'}` +
+        ` / amplified=${result.amplified ? '是' : '否'}` +
         ` / events=${formatEvents(result.events)}`;
       pushLog(line);
-      setToast(`魔法箭結算：王傷 ${result.bossDamage}（自 (${attacker.q},${attacker.r})）`);
+      setToast(
+        `魔法箭：王傷 ${result.bossDamage}` +
+          (usedAmp ? '（已增幅）' : ''),
+      );
+      return;
+    }
+
+    // —— 騎士：攻擊（鄰王打王；否則打鄰格可拆牆）——
+    if (card.cardId === 'attack') {
+      let target: Axial | undefined;
+      if (distance(attacker, BOSS_HEX) === 1) {
+        target = BOSS_HEX;
+      } else {
+        // 薄 UI：自動選單位鄰格第一塊可拆牆
+        target = neighbors(attacker).find((h) => {
+          const tile = getTile(board, h);
+          return tile !== undefined && kindAllowsCrack(tile.kind);
+        });
+      }
+      if (!target) {
+        const msg = '需鄰王，或鄰格有可拆牆';
+        pushLog(
+          `【攻擊】失敗：${msg}（目前 (${attacker.q},${attacker.r}) 距王 ${distance(attacker, BOSS_HEX)}）`,
+        );
+        setToast(`攻擊失敗：${msg}`);
+        return;
+      }
+      const result = resolveKnightAttack({
+        board,
+        attacker,
+        target,
+      });
+      if (result.board !== board) {
+        setBoard(result.board);
+      }
+      removeFromHand(card.instanceId);
+      const tgtDesc = equals(target, BOSS_HEX)
+        ? '王'
+        : `牆(${target.q},${target.r})`;
+      const adjNote =
+        equals(target, BOSS_HEX) && result.reason === 'not_adjacent'
+          ? ' / 非鄰王→0傷'
+          : '';
+      const line =
+        `【攻擊】→ ${tgtDesc}` +
+        ` bossDamage=${result.bossDamage}` +
+        ` ok=${result.ok}` +
+        (result.reason ? ` reason=${result.reason}` : '') +
+        adjNote +
+        ` / events=${formatEvents(result.events)}`;
+      pushLog(line);
+      setToast(
+        result.ok
+          ? `攻擊 ${tgtDesc}：王傷 ${result.bossDamage}`
+          : `攻擊失敗：${result.reason ?? '未知'}`,
+      );
       return;
     }
 
@@ -193,7 +414,8 @@ export function App() {
       <header>
         <h1>薄 UI（棋盤移動 + 手牌 demo）</h1>
         <p className="muted">
-          點鄰格移動單位（牆／王格拒絕）；射擊／魔法箭以「我」格為 attacker。尚無完整對局 loop。
+          氣瓶棄射擊裝填、增幅餵下一箭、騎士鄰王／鄰牆近戰；切職業重建手牌。尚無完整對局
+          loop。
         </p>
       </header>
 
@@ -201,16 +423,19 @@ export function App() {
 
       <div>
         <span className="tab">
-          {demo === 'gunner' ? '槍手 demo' : '法師 demo'}
+          {demoLabel(demo)}
           {' · '}單位 ({unitHex.q},{unitHex.r})
-        </span>
-        {' '}
-        <button type="button" onClick={() => setDemo('gunner')}>
+          {demo === 'gunner' ? ` · ${ammoHint}` : ''}
+          {demo === 'mage' && amplifiedPending ? ' · 增幅待用' : ''}
+        </span>{' '}
+        <button type="button" onClick={() => switchDemo('gunner')}>
           槍手
-        </button>
-        {' '}
-        <button type="button" onClick={() => setDemo('mage')}>
+        </button>{' '}
+        <button type="button" onClick={() => switchDemo('mage')}>
           法師
+        </button>{' '}
+        <button type="button" onClick={() => switchDemo('knight')}>
+          騎士
         </button>
       </div>
 
@@ -226,7 +451,9 @@ export function App() {
           {log.length === 0 ? (
             <li className="empty">尚無紀錄</li>
           ) : (
-            log.map((line, i) => <li key={`${i}-${line.slice(0, 24)}`}>{line}</li>)
+            log.map((line, i) => (
+              <li key={`${i}-${line.slice(0, 24)}`}>{line}</li>
+            ))
           )}
         </ul>
       </section>
