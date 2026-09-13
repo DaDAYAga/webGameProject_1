@@ -1,9 +1,10 @@
 /**
  * 學習筆記（六角 Canvas／三職業試玩）：
- * 1) 規則在 core；畫面只做 axial→像素、三棋子色、地形統一標籤。
+ * 1) 規則在 core；畫面只做 axial→像素、三棋子色、地形統一標籤；半徑由 props 傳入。
  * 2) 老化牆：凡 plain 系且 aged:true → 同一填色＋「老化」（開場牆＝王鋪老化後同貌）。
  * 3) 未老化 plain 系 → 「牆體」＋較亮填色；空地板 #1e2430。
- * 4) hoverPath 螢光綠；甜區琥珀；Canvas 數學當黑盒。
+ * 4) hoverPath 螢光綠；攻擊目標珊瑚紅；甜區琥珀；Canvas 數學當黑盒。
+ * 5) 右上角王牌庫 chip：懸停看剩餘張數／N 分布／地形袋。
  */
 import { useEffect, useMemo, useRef, type MouseEvent } from 'react';
 import {
@@ -27,6 +28,10 @@ const PATH_FILL = '#39FF14';
 const PATH_STROKE = '#b8ff66';
 const PATH_START_FILL = 'rgba(57, 255, 20, 0.28)';
 
+/** 攻擊／指定目標：珊瑚紅（與路徑綠區隔）。 */
+const TARGET_FILL = 'rgba(255, 72, 110, 0.42)';
+const TARGET_STROKE = '#ff8aa8';
+
 /** 遠程甜區琥珀洗。 */
 const SWEET_FILL = 'rgba(255, 176, 46, 0.32)';
 const SWEET_FILL_UNIT = 'rgba(255, 176, 46, 0.48)';
@@ -48,6 +53,20 @@ export type BoardActorView = {
   stroke: string;
 };
 
+/** 王牌庫懸停摘要（由 App 組好）。 */
+export type BossDeckHoverInfo = {
+  remainingCards: number;
+  byN: { n2: number; n3: number; n4: number };
+  byKind: {
+    plain: number;
+    plainAged: number;
+    curse: number;
+    silence: number;
+  };
+  /** 重製表單老化牆體 >0 時才顯示老化剩餘。 */
+  showAged: boolean;
+};
+
 type BoardCanvasProps = {
   board: Board;
   /** 三職業棋子（取代舊 我／友）。 */
@@ -55,6 +74,8 @@ type BoardCanvasProps = {
   /** 目前選中職業格（甜區「甜」標用）。 */
   selectedHex?: Axial;
   hoverPath?: Axial[] | null;
+  /** 騎士攻擊等指定目標高亮（有別於走路路徑）。 */
+  targetHexes?: Axial[] | null;
   onHexClick?: (hex: Axial) => void;
   onHexHover?: (hex: Axial | null) => void;
   showSweetZone?: boolean;
@@ -62,6 +83,10 @@ type BoardCanvasProps = {
   onReset?: () => void;
   /** 選出生點時提示。 */
   spawnHint?: string | null;
+  /** 地圖半徑（勿改 core DEFAULT；由此傳入）。 */
+  mapRadius?: number;
+  /** 右上角王牌庫 chip。 */
+  bossDeckInfo?: BossDeckHoverInfo | null;
 };
 
 const HEX_SIZE = 28;
@@ -151,8 +176,14 @@ function labelForHex(hex: Axial, board: Board): string {
   return '';
 }
 
-function labelFill(label: string, onPath: boolean, isPathStart: boolean): string {
+function labelFill(
+  label: string,
+  onPath: boolean,
+  isPathStart: boolean,
+  onTarget: boolean,
+): string {
   if (label === '沉默') return '#111111';
+  if (onTarget) return '#2a0810';
   if (onPath && !isPathStart) return '#0a1a08';
   return '#e8eaef';
 }
@@ -162,22 +193,30 @@ function pathIndex(path: Axial[] | null | undefined, hex: Axial): number {
   return path.findIndex((h) => equals(h, hex));
 }
 
+function isTargetHex(targets: Axial[] | null | undefined, hex: Axial): boolean {
+  if (!targets || targets.length === 0) return false;
+  return targets.some((h) => equals(h, hex));
+}
+
 export function BoardCanvas({
   board,
   actors,
   selectedHex,
   hoverPath,
+  targetHexes,
   onHexClick,
   onHexHover,
   showSweetZone = false,
   onReset,
   spawnHint,
+  mapRadius = DEFAULT_MAP_RADIUS,
+  bossDeckInfo,
 }: BoardCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const hexes = useMemo(
-    () => listMapHexes({ radius: DEFAULT_MAP_RADIUS }),
-    [],
+    () => listMapHexes({ radius: mapRadius }),
+    [mapRadius],
   );
 
   const layout = useMemo(() => {
@@ -217,11 +256,12 @@ export function BoardCanvas({
       const pi = pathIndex(hoverPath, h);
       const onPath = pi >= 0;
       const isPathStart = onPath && pi === 0;
+      const onTarget = isTargetHex(targetHexes, h);
 
       ctx.beginPath();
-      ctx.moveTo(corners[0][0], corners[0][1]);
+      ctx.moveTo(corners[0]![0], corners[0]![1]);
       for (let i = 1; i < corners.length; i++) {
-        ctx.lineTo(corners[i][0], corners[i][1]);
+        ctx.lineTo(corners[i]![0], corners[i]![1]);
       }
       ctx.closePath();
       ctx.fillStyle = fillForHex(h, board);
@@ -233,24 +273,30 @@ export function BoardCanvas({
         ctx.fillStyle = unitIn ? SWEET_FILL_UNIT : SWEET_FILL;
         ctx.fill();
       }
+      if (onTarget) {
+        ctx.fillStyle = TARGET_FILL;
+        ctx.fill();
+      }
       if (onPath) {
         ctx.fillStyle = isPathStart ? PATH_START_FILL : PATH_FILL;
         ctx.fill();
       }
-      if (onPath) {
+      if (onTarget && !onPath) {
+        ctx.strokeStyle = TARGET_STROKE;
+        ctx.lineWidth = 2.5;
+      } else if (onPath) {
         ctx.strokeStyle = PATH_STROKE;
         ctx.lineWidth = 2.5;
       } else {
         ctx.strokeStyle = strokeForHex(h, board, actors);
         const isActor = actors.some((a) => equals(a.hex, h));
-        ctx.lineWidth =
-          equals(h, BOSS_HEX) || isActor ? 2 : 1;
+        ctx.lineWidth = equals(h, BOSS_HEX) || isActor ? 2 : 1;
       }
       ctx.stroke();
 
       const label = labelForHex(h, board);
       if (label) {
-        ctx.fillStyle = labelFill(label, onPath, isPathStart);
+        ctx.fillStyle = labelFill(label, onPath, isPathStart, onTarget);
         ctx.font =
           label.length >= 2
             ? '10px "Segoe UI", "Noto Sans TC", sans-serif'
@@ -271,7 +317,8 @@ export function BoardCanvas({
       } else if (
         distance(h, BOSS_HEX) <= 2 &&
         !actors.some((a) => equals(a.hex, h)) &&
-        !onPath
+        !onPath &&
+        !onTarget
       ) {
         ctx.fillStyle = '#6b7385';
         ctx.font = '9px ui-monospace, Consolas, monospace';
@@ -302,7 +349,16 @@ export function BoardCanvas({
       ctx.textBaseline = 'middle';
       ctx.fillText(actor.label, cx, cy);
     }
-  }, [actors, board, focusHex, hexes, hoverPath, layout, showSweetZone]);
+  }, [
+    actors,
+    board,
+    focusHex,
+    hexes,
+    hoverPath,
+    layout,
+    showSweetZone,
+    targetHexes,
+  ]);
 
   function eventToHex(e: MouseEvent<HTMLCanvasElement>): Axial | null {
     const canvas = canvasRef.current;
@@ -313,7 +369,7 @@ export function BoardCanvas({
     const px = (e.clientX - rect.left) * scaleX - layout.originX;
     const py = (e.clientY - rect.top) * scaleY - layout.originY;
     const hex = pixelToAxial(px, py, HEX_SIZE);
-    if (distance(hex, BOSS_HEX) > DEFAULT_MAP_RADIUS) return null;
+    if (distance(hex, BOSS_HEX) > mapRadius) return null;
     return hex;
   }
 
@@ -341,8 +397,30 @@ export function BoardCanvas({
   return (
     <section className="board-panel" aria-label="六角棋盤">
       <h2>開場棋盤（Canvas）</h2>
+      {bossDeckInfo ? (
+        <div className="boss-deck-chip" title="">
+          <span className="boss-deck-chip-label">王牌庫</span>
+          <span className="boss-deck-chip-count">
+            {bossDeckInfo.remainingCards}
+          </span>
+          <div className="boss-deck-hover" role="tooltip">
+            <div>剩餘牌：{bossDeckInfo.remainingCards}</div>
+            <div>
+              2 格×{bossDeckInfo.byN.n2}　3 格×{bossDeckInfo.byN.n3}　4 格×
+              {bossDeckInfo.byN.n4}
+            </div>
+            <div>
+              完整牆體×{bossDeckInfo.byKind.plain}　詛咒×
+              {bossDeckInfo.byKind.curse}　沉默×{bossDeckInfo.byKind.silence}
+              {bossDeckInfo.showAged
+                ? `　老化牆體×${bossDeckInfo.byKind.plainAged}`
+                : ''}
+            </div>
+          </div>
+        </div>
+      ) : null}
       <p className="muted board-hint">
-        半徑 {DEFAULT_MAP_RADIUS} · flat-top · 王 (0,0)
+        半徑 {mapRadius} · flat-top · 王 (0,0)
         {posHint ? ` · ${posHint}` : ''} · 地形 {wallCount} 格
         {showSweetZone
           ? isInRangedSweetZone(focusHex)
@@ -364,7 +442,7 @@ export function BoardCanvas({
         onMouseMove={handleMove}
         onMouseLeave={handleLeave}
         role="img"
-        aria-label={`六角地圖半徑 ${DEFAULT_MAP_RADIUS}`}
+        aria-label={`六角地圖半徑 ${mapRadius}`}
       />
       <div className="board-footer">
         {onReset ? (

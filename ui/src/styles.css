@@ -303,3 +303,203 @@ header h1 {
   cursor: pointer;
   user-select: none;
 }
+
+/* 日誌下方右對齊結束回合 */
+.log-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  padding: 0.45rem 0.65rem 0.55rem;
+  border-top: 1px solid #2e3648;
+  flex: 0 0 auto;
+  background: #171b24;
+}
+
+.log-footer .end-turn {
+  min-width: 7.5rem;
+  padding: 0.55rem 0.85rem;
+  border-radius: 10px;
+  border: 1px solid #5a4a3a;
+  background: #2c2430;
+  color: #f0c9a0;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.log-footer .end-turn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* 手牌完整 tooltip（fixed portal） */
+.card-rich-tooltip {
+  position: fixed;
+  z-index: 40;
+  width: 280px;
+  padding: 0.65rem 0.75rem;
+  border-radius: 10px;
+  border: 1px solid #4a5570;
+  background: #1a2030;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+  font-size: 0.82rem;
+  color: #e8eaef;
+}
+
+.card-rich-title {
+  font-weight: 700;
+  margin-bottom: 0.25rem;
+}
+
+.card-rich-meta {
+  color: #9aa3b2;
+  font-size: 0.75rem;
+  margin-bottom: 0.35rem;
+}
+
+.card-rich-side {
+  color: #c9b48a;
+  margin-bottom: 0.35rem;
+}
+
+.card-rich-how {
+  color: #c9d4ea;
+  line-height: 1.4;
+}
+
+/* 王牌庫 chip：棋盤右上 */
+.boss-deck-chip {
+  position: absolute;
+  top: 2.55rem;
+  right: 0.65rem;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.3rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid #5a3a3a;
+  background: #2a1c1c;
+  color: #f0c9a0;
+  font-size: 0.78rem;
+  cursor: default;
+}
+
+.boss-deck-chip-label {
+  opacity: 0.85;
+}
+
+.boss-deck-chip-count {
+  font-weight: 700;
+  min-width: 1.4rem;
+  text-align: center;
+}
+
+.boss-deck-hover {
+  display: none;
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 220px;
+  padding: 0.55rem 0.65rem;
+  border-radius: 8px;
+  border: 1px solid #4a5570;
+  background: #1a2030;
+  color: #e8eaef;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+  white-space: nowrap;
+}
+
+.boss-deck-chip:hover .boss-deck-hover {
+  display: block;
+}
+
+/* 重製設定表單 */
+.reset-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: rgba(8, 10, 16, 0.62);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+
+.reset-modal {
+  width: min(440px, 100%);
+  max-height: 90vh;
+  overflow-y: auto;
+  border-radius: 12px;
+  border: 1px solid #3d4658;
+  background: #1a1f2a;
+  padding: 1rem 1.1rem 1.1rem;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.5);
+}
+
+.reset-modal h2 {
+  margin: 0 0 0.65rem;
+  font-size: 1.05rem;
+}
+
+.reset-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.reset-form label {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  font-size: 0.88rem;
+  color: #c9d4ea;
+}
+
+.reset-form input[type='number'] {
+  width: 5.5rem;
+  padding: 0.3rem 0.4rem;
+  border-radius: 6px;
+  border: 1px solid #3d4658;
+  background: #12141a;
+  color: #e8eaef;
+}
+
+.reset-form fieldset {
+  border: 1px solid #2e3648;
+  border-radius: 8px;
+  margin: 0.25rem 0 0;
+  padding: 0.55rem 0.65rem 0.7rem;
+}
+
+.reset-form legend {
+  padding: 0 0.35rem;
+  color: #9aa3b2;
+  font-size: 0.8rem;
+}
+
+.reset-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.55rem;
+  margin-top: 0.75rem;
+}
+
+.reset-actions button {
+  padding: 0.45rem 0.85rem;
+  border-radius: 8px;
+  border: 1px solid #3d4658;
+  background: #232936;
+  color: #c9d4ea;
+  cursor: pointer;
+}
+
+.reset-actions button.primary {
+  border-color: #5a4a3a;
+  background: #2c2430;
+  color: #f0c9a0;
+  font-weight: 600;
+}

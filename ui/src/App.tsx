@@ -1,9 +1,9 @@
 /**
- * 學習筆記（三職業平衡試玩）：
+ * 學習筆記（三職業平衡試玩／2026-09-13o）：
  * 1) 三棋子常駐：騎／槍／法；選職業＝選棋子＋看手牌；全結束才進下一輪。
- * 2) 有效傷王 → 立刻威脅序鋪 1 plain；輪末零傷才鋪 2 punish（無王行動者回合）。
- * 3) advanceWallAging 寫回 aged → Canvas 標籤牆體→老化；開場牆從不進老化管線。
- * 4) 重製＝開場盤＋依序點 3 出生格；手牌上限騎／槍 7、法 8。
+ * 2) 有效傷王 → 抽王牌庫 N 格＋地形袋種類威脅序鋪放；輪末零傷才鋪 2 punish。
+ * 3) 騎士攻擊須指定鄰 1 目標（王或可拆牆）；取消指定仍可用。
+ * 4) 重製先填設定表（半徑／王HP／牌庫）再出生點；手牌上限 7/7/8。
  */
 import { useMemo, useState } from 'react';
 import {
@@ -72,7 +72,7 @@ import {
   subtract,
   type Axial,
 } from '@core/hex/index.js';
-import { BoardCanvas, type BoardActorView } from './BoardCanvas';
+import { BoardCanvas, type BoardActorView, type BossDeckHoverInfo } from './BoardCanvas';
 import { Hand, type HandCard } from './Hand';
 import { sideHintFor } from './cardHints';
 
@@ -92,9 +92,98 @@ const HAND_CAP: Record<ClassId, number> = {
   mage: 8,
 };
 
+
+const BOSS_HP_DEFAULT = 20;
+
+type BossCountCard = { n: 2 | 3 | 4 };
+type KindToken = 'plain' | 'plain_aged' | 'curse' | 'silence';
+
+type ResetSetup = {
+  mapRadius: number;
+  bossHp: number;
+  deckSize: number;
+  place2: number;
+  place3: number;
+  place4: number;
+  agedWalls: number;
+  intactWalls: number;
+  curseTiles: number;
+  silenceTiles: number;
+};
+
+const DEFAULT_RESET_SETUP: ResetSetup = {
+  mapRadius: DEFAULT_MAP_RADIUS,
+  bossHp: BOSS_HP_DEFAULT,
+  deckSize: 30,
+  place2: 15,
+  place3: 12,
+  place4: 3,
+  agedWalls: 0,
+  intactWalls: 16,
+  curseTiles: 13,
+  silenceTiles: 1,
+};
+
+function shuffleInPlace<T>(arr: T[]): T[] {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    const tmp = arr[i]!;
+    arr[i] = arr[j]!;
+    arr[j] = tmp;
+  }
+  return arr;
+}
+
+function buildBossDeck(place2: number, place3: number, place4: number): BossCountCard[] {
+  const cards: BossCountCard[] = [];
+  for (let i = 0; i < place2; i++) cards.push({ n: 2 });
+  for (let i = 0; i < place3; i++) cards.push({ n: 3 });
+  for (let i = 0; i < place4; i++) cards.push({ n: 4 });
+  return shuffleInPlace(cards);
+}
+
+function buildKindBag(
+  aged: number,
+  intact: number,
+  curse: number,
+  silence: number,
+): KindToken[] {
+  const bag: KindToken[] = [];
+  for (let i = 0; i < intact; i++) bag.push('plain');
+  for (let i = 0; i < aged; i++) bag.push('plain_aged');
+  for (let i = 0; i < curse; i++) bag.push('curse');
+  for (let i = 0; i < silence; i++) bag.push('silence');
+  return shuffleInPlace(bag);
+}
+
+function summarizeBossDeck(
+  deck: readonly BossCountCard[],
+  bag: readonly KindToken[],
+  showAged: boolean,
+): BossDeckHoverInfo {
+  const byN = { n2: 0, n3: 0, n4: 0 };
+  for (const c of deck) {
+    if (c.n === 2) byN.n2 += 1;
+    else if (c.n === 3) byN.n3 += 1;
+    else byN.n4 += 1;
+  }
+  const byKind = { plain: 0, plainAged: 0, curse: 0, silence: 0 };
+  for (const t of bag) {
+    if (t === 'plain') byKind.plain += 1;
+    else if (t === 'plain_aged') byKind.plainAged += 1;
+    else if (t === 'curse') byKind.curse += 1;
+    else byKind.silence += 1;
+  }
+  return {
+    remainingCards: deck.length,
+    byN,
+    byKind,
+    showAged,
+  };
+}
+
 const TURN_MOVES_PER_ROUND = 2;
 const TURN_ACTIONS_PER_ROUND = 1;
-const BOSS_HP_DEMO = 12;
 const PUNISH_PER_ZERO_DAMAGE = 2;
 
 const COLOR_ACT = { fill: '#3d7ea6', stroke: '#7ec8ff' };
@@ -129,9 +218,10 @@ type PendingPlay =
   | { kind: 'wind_to'; card: HandCard; from: Axial }
   | { kind: 'heroic_charge'; card: HandCard }
   | { kind: 'undying'; card: HandCard }
-  | { kind: 'devotion'; card: HandCard };
+  | { kind: 'devotion'; card: HandCard }
+  | { kind: 'attack'; card: HandCard };
 
-type Phase = 'playing' | 'spawn-pick';
+type Phase = 'playing' | 'spawn-pick' | 'reset-setup';
 
 const WIRED_IDS = new Set([
   'shot',
@@ -393,7 +483,32 @@ function pendingHint(p: PendingPlay | null): string {
   if (p.kind === 'heroic_charge') return '指定衝鋒方向：點直線上任一格（或鄰格）';
   if (p.kind === 'undying') return '指定復活落點（可站格）';
   if (p.kind === 'devotion') return '指定鄰 1 友軍格（吸咒）';
+  if (p.kind === 'attack') return '指定鄰 1 目標（王或可拆牆）';
   return '';
+}
+
+/** 騎士攻擊可選鄰 1：王或可拆 plain 系；排除友軍／沉默／詛咒／懲罰。 */
+function listKnightAttackTargets(
+  board: Board,
+  attacker: Axial,
+  actors: Actors,
+  self: ClassId,
+): Axial[] {
+  const otherHexes = occupiedExcept(actors, self);
+  return neighbors(attacker).filter((h) => {
+    if (otherHexes.some((o) => equals(o, h))) return false;
+    if (equals(h, BOSS_HEX)) return true;
+    const tile = getTile(board, h);
+    if (!tile) return false;
+    if (
+      tile.kind === 'silence' ||
+      tile.kind === 'curse' ||
+      tile.kind === 'punish'
+    ) {
+      return false;
+    }
+    return kindAllowsCrack(tile.kind);
+  });
 }
 
 function occupiedExcept(actors: Actors, self: ClassId): Axial[] {
@@ -450,12 +565,34 @@ export function App() {
   const [spawnHexes, setSpawnHexes] = useState<Partial<Record<ClassId, Axial>>>(
     {},
   );
+  const [resetDraft, setResetDraft] = useState<ResetSetup>(() => ({
+    ...DEFAULT_RESET_SETUP,
+  }));
+  const [mapRadius, setMapRadius] = useState(DEFAULT_MAP_RADIUS);
+  const [bossHpMax, setBossHpMax] = useState(BOSS_HP_DEFAULT);
+  const [showAgedInDeck, setShowAgedInDeck] = useState(false);
+  const [bossDeck, setBossDeck] = useState<BossCountCard[]>(() =>
+    buildBossDeck(
+      DEFAULT_RESET_SETUP.place2,
+      DEFAULT_RESET_SETUP.place3,
+      DEFAULT_RESET_SETUP.place4,
+    ),
+  );
+  const [kindBag, setKindBag] = useState<KindToken[]>(() =>
+    buildKindBag(
+      DEFAULT_RESET_SETUP.agedWalls,
+      DEFAULT_RESET_SETUP.intactWalls,
+      DEFAULT_RESET_SETUP.curseTiles,
+      DEFAULT_RESET_SETUP.silenceTiles,
+    ),
+  );
 
   const [selected, setSelected] = useState<ClassId>('gunner');
   const [actors, setActors] = useState<Actors>(() => INITIAL_ACTORS);
   const [board, setBoard] = useState<Board>(() => createOpeningBoard());
-  const [bossHp, setBossHp] = useState(BOSS_HP_DEMO);
+  const [bossHp, setBossHp] = useState(BOSS_HP_DEFAULT);
   const [won, setWon] = useState(false);
+  const [lost, setLost] = useState(false);
   const [roundIndex, setRoundIndex] = useState(0);
   const [bossDamagedThisRound, setBossDamagedThisRound] = useState(false);
   const [aging, setAging] = useState<Map<string, number>>(() => new Map());
@@ -463,7 +600,7 @@ export function App() {
     [],
   );
   const [log, setLog] = useState<string[]>(() => [
-    '薄 UI：三職業平衡試玩。開場老化牆。傷王即鋪牆；三人皆結束才進下一輪。',
+    '薄 UI：三職業平衡試玩。開場老化牆。傷王抽牌鋪地形；三人皆結束才進下一輪。',
   ]);
   const [toast, setToast] = useState('');
   const [pendingPlay, setPendingPlay] = useState<PendingPlay | null>(null);
@@ -531,8 +668,20 @@ export function App() {
     unitHex,
   ]);
 
+  const attackTargets = useMemo(() => {
+    if (phase !== 'playing') return null;
+    if (!pendingPlay || pendingPlay.kind !== 'attack') return null;
+    if (me.endedThisRound) return null;
+    return listKnightAttackTargets(board, unitHex, actors, selected);
+  }, [actors, board, me.endedThisRound, pendingPlay, phase, selected, unitHex]);
+
   const showSweetZone =
     hoveredCard?.cardId === 'shot' || hoveredCard?.cardId === 'magic_arrow';
+
+  const bossDeckInfo = useMemo(
+    () => summarizeBossDeck(bossDeck, kindBag, showAgedInDeck),
+    [bossDeck, kindBag, showAgedInDeck],
+  );
 
   const boardActors: BoardActorView[] = CLASS_ORDER.map((id) => {
     const a = actors[id];
@@ -597,45 +746,84 @@ export function App() {
     }
   }
 
-  /** 有效傷王：扣 HP＋立刻威脅序鋪 1 plain。 */
+  /** 有效傷王：扣 HP＋抽王牌庫 N 格並依地形袋鋪放。 */
   function noteBossDamage(amount: number) {
-    if (amount <= 0 || won) return;
+    if (amount <= 0 || won || lost) return;
     setBossDamagedThisRound(true);
-    setBossHp((hp) => {
-      const next = Math.max(0, hp - amount);
-      if (next <= 0) {
-        setWon(true);
-        setToast('勝利：王 HP ≤ 0');
-        setLog((prev) => [...prev, '【勝利】王 HP ≤ 0，停止繼續操作']);
-      }
-      return next;
-    });
-
-    // 立刻鋪牆（用當前 closure 的 board／actors）
-    const protectedHexes = collectProtected(tauntRestriction, barrierAura);
-    const picks = pickThreatPlacementHexes(board, toThreatActors(actors), 1, {
-      occupied: allHexes(actors),
-      protectedHexes,
-      bounds: { radius: DEFAULT_MAP_RADIUS },
-      exclude: wallsPlacedThisRound.map((k) => {
-        const [q, r] = k.split(',').map(Number);
-        return { q: q!, r: r! };
-      }),
-    });
-    const pick = picks[0];
-    if (pick) {
-      const nextBoard = placeTerrain(board, pick, 'plain');
-      setBoard(nextBoard);
-      const key = hexKey(pick);
-      setWallsPlacedThisRound((w) => [...w, key]);
-      pushLog(
-        `【王】受傷即鋪 plain@(${pick.q},${pick.r})（威脅序；可續走）`,
-      );
-    } else {
-      pushLog('【王】受傷但無空位可鋪 plain');
+    const hpAfter = Math.max(0, bossHp - amount);
+    setBossHp(hpAfter);
+    if (hpAfter <= 0) {
+      setWon(true);
+      setToast('勝利：王 HP ≤ 0');
+      setLog((prev) => [...prev, '【勝利】王 HP ≤ 0，停止繼續操作']);
     }
-  }
 
+    if (bossDeck.length === 0) {
+      pushLog('【王】牌盡（無法再抽鋪放）');
+      if (hpAfter > 0) {
+        setLost(true);
+        pushLog('【敗北】王牌盡且王仍存活');
+        setToast('敗北：王牌盡');
+      }
+      return;
+    }
+
+    const card = bossDeck[0]!;
+    const restDeck = bossDeck.slice(1);
+    setBossDeck(restDeck);
+
+    const protectedHexes = collectProtected(tauntRestriction, barrierAura);
+    const exclude = wallsPlacedThisRound.map((k) => {
+      const [q, r] = k.split(',').map(Number);
+      return { q: q!, r: r! };
+    });
+    const picks = pickThreatPlacementHexes(
+      board,
+      toThreatActors(actors),
+      card.n,
+      {
+        occupied: allHexes(actors),
+        protectedHexes,
+        bounds: { radius: mapRadius },
+        exclude,
+      },
+    );
+
+    let boardNow = board;
+    let bagNow = [...kindBag];
+    const placedParts: string[] = [];
+    const ageKeys: string[] = [];
+
+    for (const pick of picks) {
+      if (bagNow.length === 0) break;
+      const tok = bagNow.shift()!;
+      if (tok === 'plain') {
+        boardNow = placeTerrain(boardNow, pick, 'plain');
+        ageKeys.push(hexKey(pick));
+        placedParts.push(`牆體@(${pick.q},${pick.r})`);
+      } else if (tok === 'plain_aged') {
+        boardNow = placeTerrain(boardNow, pick, 'plain', { aged: true });
+        placedParts.push(`老化牆體@(${pick.q},${pick.r})`);
+      } else if (tok === 'curse') {
+        boardNow = placeTerrain(boardNow, pick, 'curse');
+        placedParts.push(`詛咒@(${pick.q},${pick.r})`);
+      } else {
+        boardNow = placeTerrain(boardNow, pick, 'silence');
+        placedParts.push(`沉默@(${pick.q},${pick.r})`);
+      }
+    }
+
+    setBoard(boardNow);
+    setKindBag(bagNow);
+    if (ageKeys.length > 0) {
+      setWallsPlacedThisRound((w) => [...w, ...ageKeys]);
+    }
+    const placeDesc =
+      placedParts.length > 0 ? placedParts.join('、') : '（無空位／袋空）';
+    pushLog(
+      `【王】抽了 ${card.n} 格，擺放：${placeDesc}（剩牌 ${restDeck.length}）`,
+    );
+  }
 
   function finishRound(liveBoard: Board, liveActors: Actors, liveAging: Map<string, number>, liveWalls: string[], damaged: boolean) {
     const logs: string[] = [];
@@ -651,7 +839,7 @@ export function App() {
         {
           occupied: allHexes(liveActors),
           protectedHexes,
-          bounds: { radius: DEFAULT_MAP_RADIUS },
+          bounds: { radius: mapRadius },
         },
       );
       if (picks.length === 0) {
@@ -743,6 +931,11 @@ export function App() {
       setToast('已勝利');
       return;
     }
+    if (lost) {
+      pushLog('【結束回合】已敗北，停止操作');
+      setToast('已敗北');
+      return;
+    }
     if (phase !== 'playing') return;
     const id = selected;
     const actor = actors[id];
@@ -794,13 +987,34 @@ export function App() {
     }
   }
 
-  function beginSpawnPick() {
+  function openResetSetup() {
+    setResetDraft({ ...DEFAULT_RESET_SETUP });
+    setPhase('reset-setup');
+    setPendingPlay(null);
+    setEndConfirmFor(null);
+    setToast('請確認重製設定');
+  }
+
+  function beginSpawnPick(setup: ResetSetup) {
+    setMapRadius(setup.mapRadius);
+    setBossHpMax(setup.bossHp);
+    setBossHp(setup.bossHp);
+    setShowAgedInDeck(setup.agedWalls > 0);
+    setBossDeck(buildBossDeck(setup.place2, setup.place3, setup.place4));
+    setKindBag(
+      buildKindBag(
+        setup.agedWalls,
+        setup.intactWalls,
+        setup.curseTiles,
+        setup.silenceTiles,
+      ),
+    );
     setPhase('spawn-pick');
     setSpawnStep(0);
     setSpawnHexes({});
     setBoard(createOpeningBoard());
     setWon(false);
-    setBossHp(BOSS_HP_DEMO);
+    setLost(false);
     setRoundIndex(0);
     setBossDamagedThisRound(false);
     setAging(new Map());
@@ -810,8 +1024,34 @@ export function App() {
     setHoverHex(null);
     setBarrierAura(null);
     setTauntRestriction(null);
-    setLog(['重製對局：開場盤。依序點 騎士 → 槍手 → 法師 出生格。']);
+    setLog([
+      `重製對局：半徑 ${setup.mapRadius}・王HP ${setup.bossHp}・牌庫 ${setup.deckSize}。依序點 騎士 → 槍手 → 法師 出生格。`,
+    ]);
     setToast('請點騎士出生格');
+  }
+
+  function confirmResetSetup() {
+    const s = resetDraft;
+    const placeSum = s.place2 + s.place3 + s.place4;
+    if (placeSum !== s.deckSize) {
+      const msg = `放置張數合計 ${placeSum} ≠ 手卡張數 ${s.deckSize}`;
+      setToast(msg);
+      pushLog(`【重製】${msg}`);
+      return;
+    }
+    const kindSum =
+      s.agedWalls + s.intactWalls + s.curseTiles + s.silenceTiles;
+    if (kindSum !== s.deckSize) {
+      const msg = `地形袋合計 ${kindSum} ≠ 手卡張數 ${s.deckSize}`;
+      setToast(msg);
+      pushLog(`【重製】${msg}`);
+      return;
+    }
+    if (s.mapRadius < 3 || s.mapRadius > 8) {
+      setToast('地圖半徑建議 3–8');
+      return;
+    }
+    beginSpawnPick(s);
   }
 
   function completeSpawnAndStart(hexes: Record<ClassId, Axial>) {
@@ -822,14 +1062,14 @@ export function App() {
     setSpawnHexes({});
     setSpawnStep(0);
     setBoard(createOpeningBoard());
-    setBossHp(BOSS_HP_DEMO);
     setWon(false);
+    setLost(false);
     setRoundIndex(0);
     setBossDamagedThisRound(false);
     setAging(new Map());
     setWallsPlacedThisRound([]);
     setLog([
-      '薄 UI：三職業平衡試玩。出生完成。傷王即鋪牆；三人皆結束才進下一輪。',
+      '薄 UI：三職業平衡試玩。出生完成。傷王抽牌鋪地形；三人皆結束才進下一輪。',
       `【出生】騎(${hexes.knight.q},${hexes.knight.r}) 槍(${hexes.gunner.q},${hexes.gunner.r}) 法(${hexes.mage.q},${hexes.mage.r})`,
     ]);
     setToast('對局開始');
@@ -883,6 +1123,10 @@ export function App() {
   function tryMoveTo(hex: Axial) {
     if (won) {
       setToast('已勝利，停止操作');
+      return;
+    }
+    if (lost) {
+      setToast('已敗北，停止操作');
       return;
     }
     if (me.endedThisRound) {
@@ -1162,6 +1406,39 @@ export function App() {
     if (result.forceEndTurn) endTurn('不死存在強制結束', { force: true });
   }
 
+  function completeKnightAttack(hex: Axial, card: HandCard) {
+    const targets = listKnightAttackTargets(board, unitHex, actors, selected);
+    if (!targets.some((t) => equals(t, hex))) {
+      pushLog(`【攻擊】(${hex.q},${hex.r}) 不是有效目標`);
+      setToast('請點高亮的鄰 1 目標');
+      return;
+    }
+    const counts = lookupCountsTowardAction(selected, 'attack');
+    const result = resolveKnightAttack({
+      board,
+      attacker: unitHex,
+      target: hex,
+    });
+    if (result.board !== board) setBoard(result.board);
+    updateActor(selected, (a) => ({
+      ...a,
+      hand: a.hand.filter((c) => c.instanceId !== card.instanceId),
+      actionsLeft: counts ? Math.max(0, a.actionsLeft - 1) : a.actionsLeft,
+    }));
+    setPendingPlay(null);
+    if (result.ok) noteBossDamage(result.bossDamage);
+    const tgtDesc = equals(hex, BOSS_HEX) ? '王' : `牆(${hex.q},${hex.r})`;
+    pushLog(
+      `【攻擊】→ ${tgtDesc} bossDamage=${result.bossDamage}` +
+        ` / events=${formatEvents(result.events)}`,
+    );
+    setToast(
+      result.ok
+        ? `攻擊 ${tgtDesc}：王傷 ${result.bossDamage}`
+        : `攻擊失敗：${result.reason ?? '未知'}`,
+    );
+  }
+
   function completeDevotion(hex: Axial, card: HandCard) {
     const targetId = CLASS_ORDER.find((id) => equals(actors[id].hex, hex));
     if (!targetId || targetId === selected) {
@@ -1233,6 +1510,10 @@ export function App() {
         completeDevotion(hex, pendingPlay.card);
         return;
       }
+      if (pendingPlay.kind === 'attack') {
+        completeKnightAttack(hex, pendingPlay.card);
+        return;
+      }
     }
     tryMoveTo(hex);
   }
@@ -1246,6 +1527,11 @@ export function App() {
     if (won) {
       pushLog(`【${card.name}】已勝利，停止出牌`);
       setToast('已勝利');
+      return;
+    }
+    if (lost) {
+      pushLog(`【${card.name}】已敗北，停止出牌`);
+      setToast('已敗北');
       return;
     }
     if (me.endedThisRound) {
@@ -1512,42 +1798,16 @@ export function App() {
     }
 
     if (card.cardId === 'attack') {
-      let target: Axial | undefined;
-      if (distance(attacker, BOSS_HEX) === 1) {
-        target = BOSS_HEX;
-      } else {
-        target = neighbors(attacker).find((h) => {
-          const tile = getTile(board, h);
-          return tile !== undefined && kindAllowsCrack(tile.kind);
-        });
-      }
-      if (!target) {
-        const msg = '需鄰王，或鄰格有可拆牆';
+      const targets = listKnightAttackTargets(board, attacker, actors, selected);
+      if (targets.length === 0) {
+        const msg = '需鄰王，或鄰格有可拆牆（不可選友軍／沉默／詛咒／懲罰）';
         pushLog(`【攻擊】失敗：${msg}`);
         setToast(`攻擊失敗：${msg}`);
         return;
       }
-      const result = resolveKnightAttack({
-        board,
-        attacker,
-        target,
-      });
-      if (result.board !== board) setBoard(result.board);
-      updateActor(selected, (a) => ({
-        ...a,
-        hand: a.hand.filter((c) => c.instanceId !== card.instanceId),
-        actionsLeft: counts ? Math.max(0, a.actionsLeft - 1) : a.actionsLeft,
-      }));
-      if (result.ok) noteBossDamage(result.bossDamage);
-      const tgtDesc = equals(target, BOSS_HEX)
-        ? '王'
-        : `牆(${target.q},${target.r})`;
-      pushLog(`【攻擊】→ ${tgtDesc} bossDamage=${result.bossDamage}`);
-      setToast(
-        result.ok
-          ? `攻擊 ${tgtDesc}：王傷 ${result.bossDamage}`
-          : `攻擊失敗：${result.reason ?? '未知'}`,
-      );
+      setPendingPlay({ kind: 'attack', card });
+      pushLog(`【攻擊】進入指定：可選 ${targets.length} 格`);
+      setToast('攻擊：點高亮鄰格目標');
       return;
     }
 
@@ -1648,11 +1908,14 @@ export function App() {
           }
           selectedHex={phase === 'playing' ? unitHex : undefined}
           hoverPath={hoverPath}
+          targetHexes={attackTargets}
           onHexClick={onHexClick}
           onHexHover={setHoverHex}
           showSweetZone={showSweetZone && phase === 'playing'}
-          onReset={beginSpawnPick}
+          onReset={openResetSetup}
           spawnHint={spawnHint}
+          mapRadius={mapRadius}
+          bossDeckInfo={bossDeckInfo}
         />
 
         <section className="log-panel" aria-label="事件日誌">
@@ -1666,15 +1929,31 @@ export function App() {
               ))
             )}
           </ul>
+          <div className="log-footer">
+            <button
+              type="button"
+              className="end-turn"
+              onClick={() => endTurn('玩家結束')}
+              disabled={
+                won ||
+                lost ||
+                phase !== 'playing' ||
+                me.endedThisRound
+              }
+            >
+              結束回合
+            </button>
+          </div>
         </section>
       </div>
 
       <div className="turn-row">
         <span className="tab">
           {classLabel(selected)}
-          {' · '}王HP {bossHp}/{BOSS_HP_DEMO}
+          {' · '}王HP {bossHp}/{bossHpMax}
           {' · '}輪 {roundIndex}
           {won ? ' · 勝利' : ''}
+          {lost ? ' · 敗北' : ''}
           {' · '}移動 {movesLeft}/{TURN_MOVES_PER_ROUND}
           {' · '}行動 {actionsLeft}/{TURN_ACTIONS_PER_ROUND}
           {moveLocked ? ' · 移動鎖定' : ''}
@@ -1690,14 +1969,6 @@ export function App() {
           {pendingPlay ? ` · 指定:${pendingPlay.kind}` : ''}
           {lastDraw ? ` · 上次抽 ${lastDraw}` : ''}
         </span>
-        <button
-          type="button"
-          className="end-turn"
-          onClick={() => endTurn('玩家結束')}
-          disabled={won || phase !== 'playing' || me.endedThisRound}
-        >
-          結束回合
-        </button>
         {pendingPlay ? (
           <button
             type="button"
@@ -1775,6 +2046,183 @@ export function App() {
       <div className="toast" role="status">
         {toast}
       </div>
+
+      {phase === 'reset-setup' ? (
+        <div className="reset-modal-backdrop" role="dialog" aria-modal="true">
+          <div className="reset-modal">
+            <h2>重製對局設定</h2>
+            <div className="reset-form">
+              <label>
+                地圖半徑
+                <input
+                  type="number"
+                  min={3}
+                  max={8}
+                  value={resetDraft.mapRadius}
+                  onChange={(e) =>
+                    setResetDraft((d) => ({
+                      ...d,
+                      mapRadius: Number(e.target.value),
+                    }))
+                  }
+                />
+              </label>
+              <label>
+                王 HP
+                <input
+                  type="number"
+                  min={1}
+                  max={99}
+                  value={resetDraft.bossHp}
+                  onChange={(e) =>
+                    setResetDraft((d) => ({
+                      ...d,
+                      bossHp: Number(e.target.value),
+                    }))
+                  }
+                />
+              </label>
+              <label>
+                手卡張數
+                <input
+                  type="number"
+                  min={1}
+                  max={60}
+                  value={resetDraft.deckSize}
+                  onChange={(e) =>
+                    setResetDraft((d) => ({
+                      ...d,
+                      deckSize: Number(e.target.value),
+                    }))
+                  }
+                />
+              </label>
+              <fieldset>
+                <legend>放置張數（合計＝手卡）</legend>
+                <label>
+                  2 格
+                  <input
+                    type="number"
+                    min={0}
+                    value={resetDraft.place2}
+                    onChange={(e) =>
+                      setResetDraft((d) => ({
+                        ...d,
+                        place2: Number(e.target.value),
+                      }))
+                    }
+                  />
+                </label>
+                <label>
+                  3 格
+                  <input
+                    type="number"
+                    min={0}
+                    value={resetDraft.place3}
+                    onChange={(e) =>
+                      setResetDraft((d) => ({
+                        ...d,
+                        place3: Number(e.target.value),
+                      }))
+                    }
+                  />
+                </label>
+                <label>
+                  4 格
+                  <input
+                    type="number"
+                    min={0}
+                    value={resetDraft.place4}
+                    onChange={(e) =>
+                      setResetDraft((d) => ({
+                        ...d,
+                        place4: Number(e.target.value),
+                      }))
+                    }
+                  />
+                </label>
+              </fieldset>
+              <fieldset>
+                <legend>地形袋（合計＝手卡）</legend>
+                <label>
+                  老化牆體
+                  <input
+                    type="number"
+                    min={0}
+                    value={resetDraft.agedWalls}
+                    onChange={(e) =>
+                      setResetDraft((d) => ({
+                        ...d,
+                        agedWalls: Number(e.target.value),
+                      }))
+                    }
+                  />
+                </label>
+                <label>
+                  完整牆體
+                  <input
+                    type="number"
+                    min={0}
+                    value={resetDraft.intactWalls}
+                    onChange={(e) =>
+                      setResetDraft((d) => ({
+                        ...d,
+                        intactWalls: Number(e.target.value),
+                      }))
+                    }
+                  />
+                </label>
+                <label>
+                  詛咒
+                  <input
+                    type="number"
+                    min={0}
+                    value={resetDraft.curseTiles}
+                    onChange={(e) =>
+                      setResetDraft((d) => ({
+                        ...d,
+                        curseTiles: Number(e.target.value),
+                      }))
+                    }
+                  />
+                </label>
+                <label>
+                  沉默
+                  <input
+                    type="number"
+                    min={0}
+                    value={resetDraft.silenceTiles}
+                    onChange={(e) =>
+                      setResetDraft((d) => ({
+                        ...d,
+                        silenceTiles: Number(e.target.value),
+                      }))
+                    }
+                  />
+                </label>
+              </fieldset>
+            </div>
+            <div className="reset-actions">
+              <button
+                type="button"
+                onClick={() => {
+                  setPhase('playing');
+                  setToast('已取消重製');
+                }}
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                className="primary"
+                onClick={confirmResetSetup}
+              >
+                確認並選出生點
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -22,6 +22,148 @@ export const CARD_SIDE_HINTS: Record<string, string> = {
   undying: '輪末復活',
 };
 
+export type CardRichTooltip = {
+  title: string;
+  countsLabel: string;
+  silenceLabel: string;
+  sideEffects: string;
+  how: string;
+};
+
+/** 懸停 2 秒後的完整說明（zh-Hant）。 */
+export const CARD_RICH_TOOLTIPS: Record<string, CardRichTooltip> = {
+  shot: {
+    title: '射擊',
+    countsLabel: '計次',
+    silenceLabel: '受沉默',
+    sideEffects: '消耗裝填槽加成；遠程傷王。',
+    how: '對王結算遠程傷害：甜區（距王 ≤3）完整傷，區外 −1（最低 1）。有裝填時一併結算並清空槽。大招授予的「可再射」可不耗行動點且可忽略距離懲罰。',
+  },
+  playful_bottle: {
+    title: '嬉戲氣瓶',
+    countsLabel: '不計次',
+    silenceLabel: '受沉默',
+    sideEffects: '棄 1 張射擊 → 裝填傷害 +1。',
+    how: '手牌須有射擊可棄；裝填槽合計上限 2。成功後不耗行動點。',
+  },
+  mischief_bottle: {
+    title: '惡作劇氣瓶',
+    countsLabel: '不計次',
+    silenceLabel: '受沉默',
+    sideEffects: '棄 1 張射擊 → 裝填抽牌 +1。',
+    how: '手牌須有射擊可棄；裝填槽合計上限 2。成功後不耗行動點。',
+  },
+  turbulence: {
+    title: '大亂流',
+    countsLabel: '計次',
+    silenceLabel: '受沉默',
+    sideEffects: '可棄最多 2 張氣瓶牌，移動步數＝棄牌數＋1。',
+    how: '進入指定後點恰好 N 步的可站終點；路徑不可穿牆。棄掉的氣瓶與本牌一併離手。',
+  },
+  power_up: {
+    title: 'Power UP!!',
+    countsLabel: '計次',
+    silenceLabel: '受沉默',
+    sideEffects: '臨時射擊（清裝填）。',
+    how: '以臨時射擊模式對王結算遠程傷並清空裝填；本薄 UI 走 temp_shot 路徑。',
+  },
+  big_show: {
+    title: '來吧! 大鬧一場!',
+    countsLabel: '計次',
+    silenceLabel: '受沉默',
+    sideEffects: '免費氣瓶（可超 cap）＋授予再打 1 張手上射擊（可忽距離）。',
+    how: '須尚未移動。成功後可再打 1 張手上射擊且不耗該次行動點、忽略距離懲罰。',
+  },
+  amplify: {
+    title: '強能增幅',
+    countsLabel: '不計次',
+    silenceLabel: '受沉默',
+    sideEffects: '武裝下一招增幅。',
+    how: '不棄其他牌。下一張吃增幅的法術（魔法箭／御風／聚精／位面等）套用加成後清除 pending。',
+  },
+  magic_arrow: {
+    title: '魔法箭',
+    countsLabel: '計次',
+    silenceLabel: '受沉默',
+    sideEffects: '遠程傷王；可吃增幅。',
+    how: '對王結算遠程傷害（甜區規則同射擊）。若有增幅 pending 則加成後清除。',
+  },
+  wind: {
+    title: '御風術',
+    countsLabel: '計次',
+    silenceLabel: '受沉默',
+    sideEffects: '推動一格地形；增幅時多推 1 步。',
+    how: '先點有地形的來源格，再點其鄰格決定方向；沿該方向推動直到受阻。不可推動沉默（牌面限制）。',
+  },
+  focus: {
+    title: '聚精會神',
+    countsLabel: '不計次',
+    silenceLabel: '受沉默',
+    sideEffects: '應抽牌後強制結束回合；增幅可多抽。',
+    how: '結算抽牌數（薄 UI 僅記日誌）後強制結束目前職業回合。',
+  },
+  barrier: {
+    title: '磁力屏障',
+    countsLabel: '計次',
+    silenceLabel: '受沉默',
+    sideEffects: '保護自己鄰 1；下回合不可再出屏障。',
+    how: '以法師為中心保護鄰格，阻擋王鋪牆。本薄 UI 略過增幅寄出，固定套自己。',
+  },
+  planar_swap: {
+    title: '位面調換',
+    countsLabel: '計次',
+    silenceLabel: '受沉默',
+    sideEffects: '與友軍換位；可能強制結束。',
+    how: '與鄰近優先／預設友軍交換座標。增幅時依 core 規則強化。成功且 endTurn 則強制結束。',
+  },
+  attack: {
+    title: '攻擊',
+    countsLabel: '計次',
+    silenceLabel: '受沉默',
+    sideEffects: '鄰 1：傷王 2，或拆／破 plain 系牆。',
+    how: '出牌後進入指定：高亮可選鄰格（王或可拆牆）。不可選友軍格、沉默／詛咒／懲罰。點選後結算；開場老化破碎牆一擊消失。',
+  },
+  faith: {
+    title: '堅定信仰',
+    countsLabel: '計次',
+    silenceLabel: '受沉默',
+    sideEffects: '本回合未移動時清除自己 1 層詛咒。',
+    how: '若本回合已移動則失敗。成功減少 curseStacks 並耗行動點。',
+  },
+  heroic_charge: {
+    title: '英勇衝鋒',
+    countsLabel: '計次',
+    silenceLabel: '受沉默',
+    sideEffects: '直線衝鋒；穿老化牆；命中王傷；強制結束。',
+    how: '點軸向直線上的格決定方向；依 core 衝到受阻前並結算王傷。無論成敗多半強制結束回合。',
+  },
+  devotion: {
+    title: '奉獻',
+    countsLabel: '不計次',
+    silenceLabel: '受沉默',
+    sideEffects: '從鄰 1 友軍吸取詛咒；可能抽出不死。',
+    how: '點友軍格（已鄰則直接結算）。轉移詛咒層數；致死抽出時記 UndyingExtracted。',
+  },
+  taunt: {
+    title: '嘲諷',
+    countsLabel: '不計次',
+    silenceLabel: '不受沉默',
+    sideEffects: '限制王不可在騎士鄰 1 鋪牆。',
+    how: '須在「他人回合」情境（薄 UI 以勾選模擬）。優先級可覆寫屏障保護。',
+  },
+  undying: {
+    title: '不死存在',
+    countsLabel: '不計次',
+    silenceLabel: '不受沉默',
+    sideEffects: '輪末復活；落點周圍牆破碎化。',
+    how: '須已死亡且可行動者皆結束之輪末（薄 UI 勾選）。點可站落點復活；強制結束。',
+  },
+};
+
 export function sideHintFor(cardId: string): string {
   return CARD_SIDE_HINTS[cardId] ?? '';
+}
+
+export function richTooltipFor(cardId: string): CardRichTooltip | null {
+  return CARD_RICH_TOOLTIPS[cardId] ?? null;
 }
