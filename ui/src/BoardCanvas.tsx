@@ -1,9 +1,10 @@
 /**
  * 學習筆記（六角 Canvas 棋盤）：
- * 1) 規則在 core：開場／demo 盤、站格、路徑；畫面只做 axial→像素與高亮。
+ * 1) 規則在 core：開場／demo 盤、站格、路徑、甜區；畫面只做 axial→像素與高亮。
  * 2) onHexHover：滑鼠格回報給 App，由 App 算與 tryMoveTo 相同的 hoverPath。
  * 3) hoverPath 螢光綠 #39FF14（別於隊友 #a0e8b0）；起點可淡、終點含在路徑內。
- * 4) 取向 flat-top；axialToPixel／pixelToAxial 當黑盒，勿改公式。
+ * 4) showSweetZone：遠程甜區琥珀洗色（RANGED_SWEET_RADIUS），畫在路徑／單位之下；單位格可標「甜」。
+ * 5) 取向 flat-top；axialToPixel／pixelToAxial 當黑盒，勿改公式。
  *
  * Red Blob flat-top（size = 中心到頂邊距離）：
  *   x = size * (3/2 * q)
@@ -22,11 +23,19 @@ import {
   DEFAULT_MAP_RADIUS,
   listMapHexes,
 } from '@core/enclosure/index.js';
+import {
+  RANGED_SWEET_RADIUS,
+  isInRangedSweetZone,
+} from '@core/combat/index.js';
 
 /** 走路預覽螢光綠（比隊友綠更刺眼）。 */
 const PATH_FILL = '#39FF14';
 const PATH_STROKE = '#b8ff66';
 const PATH_START_FILL = 'rgba(57, 255, 20, 0.28)';
+
+/** 遠程甜區琥珀／金洗（別於路徑綠與隊友綠）。 */
+const SWEET_FILL = 'rgba(255, 176, 46, 0.32)';
+const SWEET_FILL_UNIT = 'rgba(255, 176, 46, 0.48)';
 
 type BoardCanvasProps = {
   /** 與 App 共用的開場／demo 盤。 */
@@ -41,6 +50,8 @@ type BoardCanvasProps = {
   onHexClick?: (hex: Axial) => void;
   /** 懸停格（離板傳 null）；App 負責算路徑。 */
   onHexHover?: (hex: Axial | null) => void;
+  /** 懸停射擊／魔法箭時顯示遠程甜區洗色。 */
+  showSweetZone?: boolean;
 };
 
 /** 六角形「中心到頂邊」的像素半徑（flat-top）。 */
@@ -143,6 +154,7 @@ export function BoardCanvas({
   hoverPath,
   onHexClick,
   onHexHover,
+  showSweetZone = false,
 }: BoardCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -194,9 +206,16 @@ export function BoardCanvas({
         ctx.lineTo(corners[i][0], corners[i][1]);
       }
       ctx.closePath();
-      // 先鋪地形底色；路徑再疊螢光（起點淡、其餘含終點實色）
+      // 地形 → 甜區洗色（在路徑／單位之下）→ 走路路徑
       ctx.fillStyle = fillForHex(h, board);
       ctx.fill();
+      const inSweet =
+        showSweetZone && distance(h, BOSS_HEX) <= RANGED_SWEET_RADIUS;
+      if (inSweet) {
+        const unitIn = equals(h, unitHex);
+        ctx.fillStyle = unitIn ? SWEET_FILL_UNIT : SWEET_FILL;
+        ctx.fill();
+      }
       if (onPath) {
         ctx.fillStyle = isPathStart ? PATH_START_FILL : PATH_FILL;
         ctx.fill();
@@ -222,6 +241,17 @@ export function BoardCanvas({
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillText(label, cx, cy);
+      } else if (
+        showSweetZone &&
+        equals(h, unitHex) &&
+        isInRangedSweetZone(unitHex)
+      ) {
+        // 單位在甜區：格上標「甜」，與路徑綠／隊友綠區隔
+        ctx.fillStyle = '#5a3a00';
+        ctx.font = 'bold 12px "Segoe UI", "Noto Sans TC", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('甜', cx, cy - HEX_SIZE * 0.55);
       } else if (distance(h, BOSS_HEX) <= 2 && !equals(h, unitHex) && !onPath) {
         // 近中心空格標座標，方便對照學習（外圈省略以免雜亂）
         ctx.fillStyle = '#6b7385';
@@ -269,7 +299,7 @@ export function BoardCanvas({
       ctx.textBaseline = 'middle';
       ctx.fillText('友', cx, cy);
     }
-  }, [allyHex, board, hexes, hoverPath, layout, unitHex]);
+  }, [allyHex, board, hexes, hoverPath, layout, showSweetZone, unitHex]);
 
   function eventToHex(e: MouseEvent<HTMLCanvasElement>): Axial | null {
     const canvas = canvasRef.current;
@@ -311,6 +341,11 @@ export function BoardCanvas({
         半徑 {DEFAULT_MAP_RADIUS} · flat-top · 王 (0,0) · 單位 ({unitHex.q},{unitHex.r})
         {allyHex ? ` · 友 (${allyHex.q},${allyHex.r})` : ''} · 地形 {wallCount} 格 ·
         懸停螢光路徑 · 點格移動／指定（demo）
+        {showSweetZone
+          ? isInRangedSweetZone(unitHex)
+            ? ' · 在甜區內'
+            : ' · 在甜區外'
+          : ''}
       </p>
       <canvas
         ref={canvasRef}

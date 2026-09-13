@@ -1,10 +1,11 @@
 /**
- * 學習筆記（移動／佔格／懸停路徑）：
+ * 學習筆記（移動／佔格／懸停路徑／甜區預覽）：
  * 1) occupied：盟友格不進 Board.tiles；走路用 shortestPath(..., { occupied:[ally] })，自身不擋自己。
  * 2) hoverPath：與 tryMoveTo 同一套路徑／步數上限；有 pendingPlay 時不顯示走路預覽。
  * 3) pendingPlay：出牌指定模式點格完成牌目標（不走移動）；取消鈕可清。
  * 4) moveLocked 仍擋「開始出牌」；大亂流／英勇衝鋒須走完或未鎖時再出。
  * 5) UI 不算規則：路徑／推動／衝鋒／裝填皆由 core 回傳，這裡只同步 state。
+ * 6) hoveredCard：Hand onCardHover 僅預覽；shot／magic_arrow → showSweetZone（不啟動 pending／移動）。
  */
 import { useMemo, useState } from 'react';
 import {
@@ -314,6 +315,8 @@ export function App() {
   const [pendingPlay, setPendingPlay] = useState<PendingPlay | null>(null);
   /** 滑鼠懸停格；App 算與 tryMoveTo 相同的走路路徑預覽。 */
   const [hoverHex, setHoverHex] = useState<Axial | null>(null);
+  /** 手牌懸停：僅預覽甜區等，不觸發 pendingPlay／出牌。 */
+  const [hoveredCard, setHoveredCard] = useState<HandCard | null>(null);
   /** 法師屏障光環 stub（僅日誌／狀態列）。 */
   const [barrierAura, setBarrierAura] = useState<BarrierAura | null>(null);
   /** 騎士詛咒層（信仰／奉獻 demo）。 */
@@ -346,6 +349,10 @@ export function App() {
     return path;
   }, [allyHex, board, hoverHex, movesLeft, pendingPlay, unitHex]);
 
+  /** shot／magic_arrow 共用 computeRangedDamageToBoss 甜區；懸停只畫不結算。 */
+  const showSweetZone =
+    hoveredCard?.cardId === 'shot' || hoveredCard?.cardId === 'magic_arrow';
+
   function pushLog(line: string) {
     setLog((prev) => [...prev, line]);
   }
@@ -369,6 +376,7 @@ export function App() {
     setHasMovedThisTurn(false);
     setMayPlayShotIgnoreRange(false);
     setPendingPlay(null);
+    setHoveredCard(null);
     setBarrierAura(null);
     setTauntRestriction(null);
     setCurseStacks(2);
@@ -1137,8 +1145,8 @@ export function App() {
       <header>
         <h1>薄 UI（棋盤移動 + 手牌 demo）</h1>
         <p className="muted">
-          懸停顯示走路路徑（螢光綠）；有 pending 時點格＝牌目標（不預覽移動）。
-          隊友擋路；demo 有完整牆／沉默／詛咒測試格。
+          懸停格＝走路路徑（螢光綠）；懸停「射擊／魔法箭」＝遠程甜區（琥珀）。
+          有 pending 時點格＝牌目標（不預覽移動）。隊友擋路；demo 有測試地形。
         </p>
       </header>
 
@@ -1149,6 +1157,7 @@ export function App() {
         hoverPath={hoverPath}
         onHexClick={onHexClick}
         onHexHover={setHoverHex}
+        showSweetZone={showSweetZone}
       />
 
       <div>
@@ -1245,7 +1254,7 @@ export function App() {
         </div>
       ) : null}
 
-      <Hand cards={hand} onPlay={onPlay} />
+      <Hand cards={hand} onPlay={onPlay} onCardHover={setHoveredCard} />
 
       <div className="toast" role="status">
         {toast}

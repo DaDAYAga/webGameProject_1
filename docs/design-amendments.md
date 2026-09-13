@@ -328,3 +328,28 @@
 - 可走範圍常駐高亮（非懸停）
 - 真實多單位佔格列表接 `core/turn`
 
+---
+
+## 2026-09-13l — 手牌懸停遠程甜區預覽（鎖定）
+
+> 來源：人類任務「shot hover shows sweet zone」。**UI-only** 預覽慣例；結算仍走 `computeRangedDamageToBoss`。
+
+### 定案
+
+1. **`Hand.onCardHover`**：`onMouseEnter` → card、`onMouseLeave` → null；**不**觸發出牌／`pendingPlay`／移動。
+2. **觸發牌**：`shot` 與 `magic_arrow`（同一遠程甜區規則）→ `BoardCanvas.showSweetZone`。
+3. **甜區幾何**：地圖格 `distance(hex, BOSS_HEX) <= RANGED_SWEET_RADIUS`（常數來自 `core/combat`，UI **不硬編 3**）。
+4. **畫層**：琥珀／金半透明洗色（約 0.28–0.48 alpha）畫在地形之上、單位／隊友／走路路徑之下；與路徑 `#39FF14`、隊友 `#a0e8b0` 區隔。單位在區內可略加強洗色並標「甜」；區外仍顯示整圈甜區。可選文案：在甜區內／在甜區外（`isInRangedSweetZone(unitHex)`）。
+5. **並存**：手牌懸停甜區時，棋盤格懸停走路路徑仍可疊在上面。
+
+### 給 bot（禁改）
+
+- 不要在 hover 時開始 pendingPlay 或移動
+- 不要在 UI 硬編碼甜區半徑 3（用 `RANGED_SWEET_RADIUS`）
+- 不要把甜區洗色畫成螢光綠或隊友綠
+
+### 未定
+
+- 其他遠程牌（若日後新增）是否一併預覽
+- 常駐甜區開關（非懸停）
+
