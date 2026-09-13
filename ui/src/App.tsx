@@ -1,10 +1,10 @@
 /**
- * 學習筆記（新串牌）：
- * 1) pendingPlay：出牌進入指定模式後，點格完成牌目標（不走移動）；取消鈕可清。
- * 2) moveLocked 仍擋一切「開始出牌」；大亂流／英勇衝鋒亦同（須走完或未鎖時再出）。
- * 3) 大招 mayPlayShot：授旗後下一張手上射擊可 ignoreRange 且不另扣行動。
- * 4) 強制結束回合（聚精／衝鋒／位面／不死）：呼叫同一套 endTurn 重置薄殼額度。
- * 5) UI 不算規則：路徑／推動／衝鋒／裝填皆由 core resolve* 回傳，這裡只同步 state。
+ * 學習筆記（移動／佔格／懸停路徑）：
+ * 1) occupied：盟友格不進 Board.tiles；走路用 shortestPath(..., { occupied:[ally] })，自身不擋自己。
+ * 2) hoverPath：與 tryMoveTo 同一套路徑／步數上限；有 pendingPlay 時不顯示走路預覽。
+ * 3) pendingPlay：出牌指定模式點格完成牌目標（不走移動）；取消鈕可清。
+ * 4) moveLocked 仍擋「開始出牌」；大亂流／英勇衝鋒須走完或未鎖時再出。
+ * 5) UI 不算規則：路徑／推動／衝鋒／裝填皆由 core 回傳，這裡只同步 state。
  */
 import { useMemo, useState } from 'react';
 import {
@@ -51,7 +51,7 @@ import {
 import {
   BOSS_HEX,
   canStandAt,
-  createOpeningBoard,
+  createDemoBoard,
   getTile,
   hexKey,
   kindAllowsCrack,
@@ -248,8 +248,18 @@ function lookupCountsTowardAction(demo: DemoClass, cardId: string): boolean {
   return def?.countsTowardAction ?? false;
 }
 
-function hasStandableNeighbor(board: Board, hex: Axial): boolean {
-  return neighbors(hex).some((n) => canStandAt(board, n));
+/** 鄰格可站？含盟友佔格阻擋（解鎖「無法續走」用）。 */
+function hasStandableNeighbor(
+  board: Board,
+  hex: Axial,
+  occupied: readonly Axial[],
+): boolean {
+  return neighbors(hex).some((n) => canStandAt(board, n, { occupied }));
+}
+
+/** 走路／預覽共用：其他單位佔格（不含自己）。 */
+function walkOccupied(allyHex: Axial): Axial[] {
+  return [allyHex];
 }
 
 /** 從 from 往 toward 是否在軸向直線；是則回傳單位方向。 */
@@ -287,7 +297,7 @@ export function App() {
   const [hand, setHand] = useState<HandCard[]>(() => buildGunnerHand());
   const [ammo, setAmmo] = useState<AmmoSlotState>(EMPTY_AMMO_SLOT);
   const [amplifiedPending, setAmplifiedPending] = useState(false);
-  const [board, setBoard] = useState<Board>(() => createOpeningBoard());
+  const [board, setBoard] = useState<Board>(() => createDemoBoard());
   const [log, setLog] = useState<string[]>([
     '薄 UI：剩餘職業牌已串；指定模式點格完成目標（非移動）。移動鎖仍擋開始出牌。',
   ]);
@@ -302,6 +312,8 @@ export function App() {
   /** 大招授旗：下一張手上射擊 ignoreRange 且不另扣行動。 */
   const [mayPlayShotIgnoreRange, setMayPlayShotIgnoreRange] = useState(false);
   const [pendingPlay, setPendingPlay] = useState<PendingPlay | null>(null);
+  /** 滑鼠懸停格；App 算與 tryMoveTo 相同的走路路徑預覽。 */
+  const [hoverHex, setHoverHex] = useState<Axial | null>(null);
   /** 法師屏障光環 stub（僅日誌／狀態列）。 */
   const [barrierAura, setBarrierAura] = useState<BarrierAura | null>(null);
   /** 騎士詛咒層（信仰／奉獻 demo）。 */
@@ -319,6 +331,20 @@ export function App() {
     () => `裝填 dmg+${ammo.damageBonus} draw+${ammo.drawBonus}`,
     [ammo],
   );
+
+  /** 與 tryMoveTo 同一套規則：有路徑且步數 ≤ movesLeft 與回合上限才高亮。 */
+  const hoverPath = useMemo(() => {
+    if (!hoverHex || pendingPlay) return null;
+    if (equals(hoverHex, unitHex)) return null;
+    if (movesLeft <= 0) return null;
+    const occupied = walkOccupied(allyHex);
+    const path = shortestPath(board, unitHex, hoverHex, { occupied });
+    if (path === null) return null;
+    const steps = path.length - 1;
+    if (steps < 1) return null;
+    if (steps > TURN_MOVES_PER_ROUND || steps > movesLeft) return null;
+    return path;
+  }, [allyHex, board, hoverHex, movesLeft, pendingPlay, unitHex]);
 
   function pushLog(line: string) {
     setLog((prev) => [...prev, line]);
@@ -405,9 +431,14 @@ export function App() {
       return;
     }
 
-    const path = shortestPath(board, unitHex, hex);
+    const occupied = walkOccupied(allyHex);
+    const path = shortestPath(board, unitHex, hex, { occupied });
     if (path === null) {
-      const why = equals(hex, BOSS_HEX) ? '不可站王格' : `不可達或不可站：${tileDesc}`;
+      const why = equals(hex, BOSS_HEX)
+        ? '不可站王格'
+        : equals(hex, allyHex)
+          ? '不可站隊友格'
+          : `不可達或不可站：${tileDesc}`;
       pushLog(`${base} → 移動拒絕（${why}）`);
       setToast(`無法移動：${why}`);
       return;
@@ -443,7 +474,7 @@ export function App() {
     let stuckUnlock = false;
     if (left <= 0) {
       nextLocked = false;
-    } else if (!hasStandableNeighbor(board, dest)) {
+    } else if (!hasStandableNeighbor(board, dest, occupied)) {
       nextLocked = false;
       stuckUnlock = true;
     }
@@ -473,7 +504,8 @@ export function App() {
   }
 
   function completeTurbulence(hex: Axial, pending: Extract<PendingPlay, { kind: 'turbulence' }>) {
-    const full = shortestPath(board, unitHex, hex);
+    const occupied = walkOccupied(allyHex);
+    const full = shortestPath(board, unitHex, hex, { occupied });
     if (full === null) {
       pushLog(`【大亂流】目標不可達／不可站 (${hex.q},${hex.r})`);
       setToast('大亂流：目標不可達');
@@ -492,6 +524,7 @@ export function App() {
       hand: toGunnerInstances(hand),
       discardBottleInstanceIds: pending.discardBottleIds,
       path: pathWithoutStart,
+      occupiedHexes: occupied,
     });
     if (!result.ok) {
       pushLog(`【大亂流】失敗：${result.reason}`);
@@ -1104,8 +1137,8 @@ export function App() {
       <header>
         <h1>薄 UI（棋盤移動 + 手牌 demo）</h1>
         <p className="muted">
-          剩餘職業牌已串；有 pending 時點格＝牌目標（非移動）。移動鎖仍擋開始出牌。
-          大亂流／衝鋒須未鎖時發動。
+          懸停顯示走路路徑（螢光綠）；有 pending 時點格＝牌目標（不預覽移動）。
+          隊友擋路；demo 有完整牆／沉默／詛咒測試格。
         </p>
       </header>
 
@@ -1113,7 +1146,9 @@ export function App() {
         board={board}
         unitHex={unitHex}
         allyHex={allyHex}
+        hoverPath={hoverPath}
         onHexClick={onHexClick}
+        onHexHover={setHoverHex}
       />
 
       <div>

@@ -8,6 +8,7 @@ import {
   crackTile,
   createEmptyBoard,
   createOpeningBoard,
+  createDemoBoard,
   destroyTile,
   getTile,
   hexKey,
@@ -227,5 +228,45 @@ describe('absorbCurseAt — 踩詛咒後格消失', () => {
     const board = createOpeningBoard();
     expect(absorbCurseAt(board, { q: 1, r: 0 })).toBeNull();
     expect(absorbCurseAt(createEmptyBoard(), { q: 1, r: 0 })).toBeNull();
+  });
+});
+
+describe('canStandAt occupied — 盟友佔格', () => {
+  it('occupied hex is unstandable; empty neighbor still ok', () => {
+    const board = createEmptyBoard();
+    const ally: Axial = { q: 3, r: -1 };
+    expect(canStandAt(board, ally)).toBe(true);
+    expect(canStandAt(board, ally, { occupied: [ally] })).toBe(false);
+    expect(canStandAt(board, { q: 2, r: 0 }, { occupied: [ally] })).toBe(true);
+  });
+
+  it('curse still standable; silence still not (with occupied elsewhere)', () => {
+    let board = createEmptyBoard();
+    board = placeTerrain(board, { q: 3, r: 1 }, 'curse');
+    board = placeTerrain(board, { q: 2, r: 1 }, 'silence');
+    const ally: Axial = { q: 3, r: -1 };
+    expect(canStandAt(board, { q: 3, r: 1 }, { occupied: [ally] })).toBe(true);
+    expect(canStandAt(board, { q: 2, r: 1 }, { occupied: [ally] })).toBe(false);
+  });
+});
+
+describe('createDemoBoard — 測試地形', () => {
+  it('places intact walls, silence, curse without overlapping opening ring / starts', () => {
+    const board = createDemoBoard();
+    expect(getTile(board, { q: 3, r: 0 })?.kind).toBe('plain');
+    expect(getTile(board, { q: 3, r: 0 })?.aged).toBe(true);
+    expect(getTile(board, { q: 1, r: 1 })?.kind).toBe('plain');
+    expect(getTile(board, { q: 2, r: 1 })?.kind).toBe('silence');
+    expect(getTile(board, { q: 4, r: 0 })?.kind).toBe('silence');
+    expect(getTile(board, { q: 3, r: 1 })?.kind).toBe('curse');
+    expect(getTile(board, { q: 4, r: 1 })?.kind).toBe('curse');
+    // 開場 6 牆仍在
+    expect(board.tiles.size).toBe(12);
+    // 單位／隊友起點無地形
+    expect(getTile(board, { q: 2, r: 0 })).toBeUndefined();
+    expect(getTile(board, { q: 3, r: -1 })).toBeUndefined();
+    expect(canStandAt(board, { q: 3, r: 0 })).toBe(false);
+    expect(canStandAt(board, { q: 2, r: 1 })).toBe(false);
+    expect(canStandAt(board, { q: 3, r: 1 })).toBe(true);
   });
 });

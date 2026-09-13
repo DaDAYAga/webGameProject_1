@@ -299,3 +299,32 @@
 
 - 可走／可指定範圍高亮
 - Power UP dig_shots 模式（薄 demo 目前固定 temp_shot）
+
+---
+
+## 2026-09-13k — 盟友佔格、demo 測試地形、懸停走路路徑（鎖定）
+
+> 來源：人類任務「ally blockers + demo tiles + hover path preview」。
+
+### 定案
+
+1. **盟友佔格**：不寫入 `Board.tiles`。走路／`shortestPath`／`hasStandableNeighbor` 視盟友格為不可站（與牆同層阻擋）。不可落地於盟友。**自身不擋自己**（起點不重驗；`occupied` 不含行走者）。
+2. **API**：`canStandAt(board, hex, { occupied? })`；`shortestPath` 選項 `occupied` 轉傳同一語意。
+3. **Demo 測試地形**（`createDemoBoard()`＝開場牆＋樣本）：  
+   - 完整老化牆 `plain`+`aged`：`(3,0)` `(1,1)`  
+   - `silence`：`(2,1)` `(4,0)`  
+   - `curse`：`(3,1)` `(4,1)`（路徑**可**踩）  
+   - 不與單位 `(2,0)`、隊友 `(3,-1)`、王、開場 6 牆重疊。畫布標籤：呢／默／整牆（破碎開場牆仍「牆」）。
+4. **懸停走路預覽**：`BoardCanvas` 回報 `onHexHover`；`App` 用與 `tryMoveTo` **同一套** `shortestPath` + 步數 ≤ `movesLeft` 與 `TURN_MOVES_PER_ROUND`。有 `pendingPlay` 不顯示。螢光綠 `#39FF14`（別於隊友綠）。無效／離板清除。
+
+### 給 bot（禁改）
+
+- 不要把單位寫進 `Board.tiles`
+- 不要在 pending 指定模式顯示走路路徑預覽
+- 不要改開場 6 牆預設為完整牆（demo 額外鋪完整牆即可）
+
+### 未定
+
+- 可走範圍常駐高亮（非懸停）
+- 真實多單位佔格列表接 `core/turn`
+

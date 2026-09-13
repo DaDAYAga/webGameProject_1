@@ -72,6 +72,23 @@ export function createOpeningBoard(opts: OpeningBoardOptions = {}): Board {
 }
 
 /**
+ * Demo 開場＋測試地形（學習用）：不與單位 (2,0)、隊友 (3,-1)、王、開場 6 牆重疊。
+ * - 完整老化牆 plain+aged：(3,0)(1,1)
+ * - 沉默 silence：(2,1)(4,0)
+ * - 詛咒 curse：(3,1)(4,1)（路徑可踩）
+ */
+export function createDemoBoard(): Board {
+  let board = createOpeningBoard();
+  board = placeTerrain(board, { q: 3, r: 0 }, 'plain', { aged: true });
+  board = placeTerrain(board, { q: 1, r: 1 }, 'plain', { aged: true });
+  board = placeTerrain(board, { q: 2, r: 1 }, 'silence');
+  board = placeTerrain(board, { q: 4, r: 0 }, 'silence');
+  board = placeTerrain(board, { q: 3, r: 1 }, 'curse');
+  board = placeTerrain(board, { q: 4, r: 1 }, 'curse');
+  return board;
+}
+
+/**
  * 讀取某格地形；無地形回 undefined。
  */
 export function getTile(board: Board, hex: Axial): Tile | undefined {
@@ -162,14 +179,33 @@ export function destroyTile(board: Board, hex: Axial): TerrainHitResult {
   };
 }
 
+/** canStandAt 選項：單位佔格不進 Board.tiles。 */
+export type CanStandAtOptions = {
+  /**
+   * 其他單位佔格（不可落地／穿越），與牆同一層阻擋。
+   * 呼叫端勿把「自己」放進來（自身不擋自己）；起點由 shortestPath 不重驗。
+   */
+  occupied?: readonly Axial[];
+};
+
 /**
  * 玩家／單位能否站在此格。
  * - 王格 (0,0)：否
+ * - occupied 佔格：否（盟友等同移動阻擋）
  * - 空格：是
  * - 有地形：依 kindAllowsStand（curse 可自願踩；牆／punish／silence 預設否）
  */
-export function canStandAt(board: Board, hex: Axial): boolean {
+export function canStandAt(
+  board: Board,
+  hex: Axial,
+  opts: CanStandAtOptions = {},
+): boolean {
   if (equals(hex, BOSS_HEX)) return false;
+  if (opts.occupied) {
+    for (const o of opts.occupied) {
+      if (equals(o, hex)) return false;
+    }
+  }
   const tile = getTile(board, hex);
   if (!tile) return true;
   return kindAllowsStand(tile.kind);

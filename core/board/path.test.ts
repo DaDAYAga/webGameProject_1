@@ -143,3 +143,29 @@ describe('standableShrinkingFanCells — 幾何過濾（非繞牆）', () => {
     }
   });
 });
+
+describe('shortestPath occupied — 繞盟友', () => {
+  it('cannot land on ally; path goes around occupied', () => {
+    const board = createEmptyBoard();
+    const from: Axial = { q: 2, r: 0 };
+    const ally: Axial = { q: 3, r: 0 };
+    const toward: Axial = { q: 4, r: 0 };
+    // 直路會踩盟友 → 必須繞
+    const blocked = shortestPath(board, from, toward, { occupied: [ally] });
+    expect(blocked).not.toBeNull();
+    expect(blocked!.some((h) => h.q === 3 && h.r === 0)).toBe(false);
+    expect(shortestPath(board, from, ally, { occupied: [ally] })).toBeNull();
+  });
+
+  it('curse walkable through path; silence blocks', () => {
+    let board = createEmptyBoard();
+    const from: Axial = { q: 2, r: 0 };
+    board = placeTerrain(board, { q: 3, r: 0 }, 'curse');
+    board = placeTerrain(board, { q: 3, r: 1 }, 'silence');
+    const viaCurse = shortestPath(board, from, { q: 4, r: 0 });
+    expect(viaCurse).not.toBeNull();
+    expect(viaCurse!.some((h) => h.q === 3 && h.r === 0)).toBe(true);
+
+    expect(shortestPath(board, from, { q: 3, r: 1 })).toBeNull();
+  });
+});

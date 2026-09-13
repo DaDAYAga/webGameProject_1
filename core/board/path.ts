@@ -31,12 +31,17 @@ export type ShortestPathOptions = {
    * 回 false 則不擴展該格（起點仍可在過濾外開始）。
    */
   isAllowedHex?: (hex: Axial) => boolean;
+  /**
+   * 其他單位佔格（盟友等）；傳入 canStandAt，不可落地／穿越。
+   * 勿含行走者自身。
+   */
+  occupied?: readonly Axial[];
 };
 
 /**
  * 在可站格上找 from→toward 的最短路徑（BFS）。
  *
- * - 進入鄰格僅當 `canStandAt(board, hex)`（**起點 from 不重驗**）
+ * - 進入鄰格僅當 `canStandAt(board, hex, { occupied })`（**起點 from 不重驗**）
  * - 預設 toward 必須可站，否則 null；`allowUnstandableTarget` 可放寬
  * - 回傳含兩端的格子序列；不可達回 null；from===toward 回 `[from]`
  *
@@ -52,13 +57,14 @@ export function shortestPath(
   const maxSteps =
     options.maxSteps ?? Math.max(distance(from, toward) * 4, 24);
   const isAllowed = options.isAllowedHex;
+  const standOpts = options.occupied ? { occupied: options.occupied } : {};
 
   if (equals(from, toward)) {
     return [{ q: from.q, r: from.r }];
   }
 
   // 預設：目標不可站 → 直接失敗（allowUnstandableTarget 時略過）
-  if (!allowUnstandableTarget && !canStandAt(board, toward)) {
+  if (!allowUnstandableTarget && !canStandAt(board, toward, standOpts)) {
     return null;
   }
 
@@ -88,10 +94,10 @@ export function shortestPath(
       if (isAllowed && !isAllowed(n)) continue;
 
       const isTarget = equals(n, toward);
-      // 進入條件：目標在 allow 時可不驗站格；其餘必須 canStandAt
+      // 進入條件：目標在 allow 時可不驗站格；其餘必須 canStandAt（含 occupied）
       if (isTarget) {
-        if (!allowUnstandableTarget && !canStandAt(board, n)) continue;
-      } else if (!canStandAt(board, n)) {
+        if (!allowUnstandableTarget && !canStandAt(board, n, standOpts)) continue;
+      } else if (!canStandAt(board, n, standOpts)) {
         continue;
       }
 
