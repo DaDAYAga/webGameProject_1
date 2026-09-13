@@ -40,3 +40,10 @@ export {
   currentActorId,
   isRoundComplete,
 } from './match.js';
+
+export {
+  pickThreatPlacementHexes,
+  type ThreatActor,
+  type PickThreatPlacementOptions,
+} from './threat.js';
+

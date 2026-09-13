@@ -1,14 +1,14 @@
 /**
- * 學習筆記（可玩回合 loop／core/turn）：
- * 1) createMatch({ actorOrder:["player","boss"], punishEnabled })＋applyCommand：結束回合／老化 registry／PunishPlace 意圖。
- * 2) 玩家結束：若本回合有效傷王 → MARK_BOSS_DAMAGED，再 END_ACTOR_TURN；王回合 v0 鋪 plain（REGISTER_WALL_PLACED）／可選 punish。
- * 3) 輪末用 advanceWallAging(aging, wallsPlaced, { board }) 把 newlyAged 寫回 tile.aged（開場／demo 預老化牆不進管線）。
+ * 學習筆記（三職業平衡試玩）：
+ * 1) 三棋子常駐：騎／槍／法；選職業＝選棋子＋看手牌；全結束才進下一輪。
+ * 2) 有效傷王 → 立刻威脅序鋪 1 plain；輪末零傷才鋪 2 punish（無王行動者回合）。
+ * 3) advanceWallAging 寫回 aged → Canvas 標籤牆體→老化；開場牆從不進老化管線。
+ * 4) 重製＝開場盤＋依序點 3 出生格；手牌上限騎／槍 7、法 8。
  */
 import { useMemo, useState } from 'react';
 import {
   EMPTY_AMMO_SLOT,
   GUNNER_CARD_DEFS,
-  makeGunnerCard,
   resolveBigShow,
   resolveGunnerShot,
   resolveMischiefBottle,
@@ -23,7 +23,6 @@ import {
 } from '@core/cards/gunner/index.js';
 import {
   MAGE_CARD_DEFS,
-  makeMageCard,
   resolveAmplify,
   resolveBarrier,
   resolveFocus,
@@ -36,7 +35,6 @@ import {
 } from '@core/cards/mage/index.js';
 import {
   KNIGHT_CARD_DEFS,
-  makeKnightCard,
   resolveDevotion,
   resolveFaith,
   resolveHeroicCharge,
@@ -49,7 +47,7 @@ import {
 import {
   BOSS_HEX,
   canStandAt,
-  createDemoBoard,
+  createOpeningBoard,
   getTile,
   hexKey,
   kindAllowsCrack,
@@ -59,15 +57,11 @@ import {
 } from '@core/board/index.js';
 import {
   DEFAULT_MAP_RADIUS,
-  listMapHexes,
 } from '@core/enclosure/index.js';
 import {
   advanceWallAging,
-  applyCommand,
-  createMatch,
-  currentActorId,
-  type MatchEvent,
-  type MatchState,
+  pickThreatPlacementHexes,
+  type ThreatActor,
 } from '@core/turn/index.js';
 import {
   AXIAL_DIRECTIONS,
@@ -78,84 +72,67 @@ import {
   subtract,
   type Axial,
 } from '@core/hex/index.js';
-import { BoardCanvas } from './BoardCanvas';
+import { BoardCanvas, type BoardActorView } from './BoardCanvas';
 import { Hand, type HandCard } from './Hand';
+import { sideHintFor } from './cardHints';
 
-type DemoClass = 'gunner' | 'mage' | 'knight';
+export type ClassId = 'knight' | 'gunner' | 'mage';
 
-/** 開場單位：距王 2、空格。 */
-const START_UNIT_HEX: Axial = { q: 2, r: 0 };
-/** 薄 demo 隊友：鄰單位，供奉獻／位面。 */
-const START_ALLY_HEX: Axial = { q: 3, r: -1 };
+const CLASS_ORDER: readonly ClassId[] = ['knight', 'gunner', 'mage'];
+
+const START_HEX: Record<ClassId, Axial> = {
+  gunner: { q: 2, r: 0 },
+  mage: { q: 3, r: -1 },
+  knight: { q: 2, r: -2 },
+};
+
+const HAND_CAP: Record<ClassId, number> = {
+  knight: 7,
+  gunner: 7,
+  mage: 8,
+};
 
 const TURN_MOVES_PER_ROUND = 2;
 const TURN_ACTIONS_PER_ROUND = 1;
-/** Demo 王 HP（薄 UI 常數，非正式數值）。 */
 const BOSS_HP_DEMO = 12;
-const ACTOR_PLAYER = 'player';
-const ACTOR_BOSS = 'boss';
+const PUNISH_PER_ZERO_DAMAGE = 2;
 
-function bootMatch(): { state: MatchState; events: MatchEvent[] } {
-  return createMatch({
-    actorOrder: [ACTOR_PLAYER, ACTOR_BOSS],
-    punishEnabled: true,
-  });
-}
+const COLOR_ACT = { fill: '#3d7ea6', stroke: '#7ec8ff' };
+const COLOR_SEL = { fill: '#3d8a5a', stroke: '#a0e8b0' };
+const COLOR_END = { fill: '#5a5a5a', stroke: '#9a9a9a' };
 
-/** 抽牌 stub：槍手 shot／法師 magic_arrow／騎士 attack。 */
-function makeDrawStubCard(demo: DemoClass, seq: number): HandCard {
-  const cardId =
-    demo === 'gunner' ? 'shot' : demo === 'mage' ? 'magic_arrow' : 'attack';
-  const name =
-    demo === 'gunner'
-      ? GUNNER_CARD_DEFS.shot.name
-      : demo === 'mage'
-        ? MAGE_CARD_DEFS.magic_arrow.name
-        : KNIGHT_CARD_DEFS.attack.name;
-  return {
-    instanceId: `draw-${demo}-${seq}-${cardId}`,
-    cardId,
-    name,
-    wired: WIRED_IDS.has(cardId),
-  };
-}
+type ClassActor = {
+  hex: Axial;
+  hand: HandCard[];
+  movesLeft: number;
+  actionsLeft: number;
+  moveLocked: boolean;
+  hasMovedThisTurn: boolean;
+  endedThisRound: boolean;
+  ammo: AmmoSlotState;
+  amplifiedPending: boolean;
+  mayPlayShotIgnoreRange: boolean;
+  curseStacks: number;
+  drawSeq: number;
+};
 
-/**
- * 王鋪牆空位：圖內、非王／單位／隊友、無地形。
- * 優先 ring-2，其次鄰接既有地形，再任意空格。
- */
-function pickBossPlaceHex(
-  board: Board,
-  unitHex: Axial,
-  allyHex: Axial,
-  exclude: Axial | null,
-): Axial | null {
-  const blocked = (h: Axial): boolean => {
-    if (equals(h, BOSS_HEX) || equals(h, unitHex) || equals(h, allyHex)) {
-      return true;
+type Actors = Record<ClassId, ClassActor>;
+
+type PendingPlay =
+  | {
+      kind: 'turbulence';
+      card: HandCard;
+      discardBottleIds: string[];
+      steps: number;
     }
-    if (exclude && equals(h, exclude)) return true;
-    return getTile(board, h) !== undefined;
-  };
-  const all = listMapHexes({ radius: DEFAULT_MAP_RADIUS }).filter(
-    (h) => !blocked(h),
-  );
-  if (all.length === 0) return null;
-  const ring2 = all.filter((h) => distance(h, BOSS_HEX) === 2);
-  if (ring2.length > 0) return ring2[0]!;
-  const adjTerrain = all.filter((h) =>
-    neighbors(h).some((n) => getTile(board, n) !== undefined),
-  );
-  if (adjTerrain.length > 0) return adjTerrain[0]!;
-  return all[0]!;
-}
+  | { kind: 'wind_from'; card: HandCard }
+  | { kind: 'wind_to'; card: HandCard; from: Axial }
+  | { kind: 'heroic_charge'; card: HandCard }
+  | { kind: 'undying'; card: HandCard }
+  | { kind: 'devotion'; card: HandCard };
 
-function summarizeMatchEvents(events: readonly MatchEvent[]): string {
-  if (events.length === 0) return '';
-  return events.map((e) => e.type).join(', ');
-}
+type Phase = 'playing' | 'spawn-pick';
 
-/** 已串結算的牌種（薄 demo）。 */
 const WIRED_IDS = new Set([
   'shot',
   'playful_bottle',
@@ -177,19 +154,34 @@ const WIRED_IDS = new Set([
   'undying',
 ]);
 
-/** UI-only 指定模式（2026-09-13j）：點格完成牌，不走移動。 */
-type PendingPlay =
-  | {
-      kind: 'turbulence';
-      card: HandCard;
-      discardBottleIds: string[];
-      steps: number;
-    }
-  | { kind: 'wind_from'; card: HandCard }
-  | { kind: 'wind_to'; card: HandCard; from: Axial }
-  | { kind: 'heroic_charge'; card: HandCard }
-  | { kind: 'undying'; card: HandCard }
-  | { kind: 'devotion'; card: HandCard };
+function classLabel(id: ClassId): string {
+  if (id === 'gunner') return '槍手';
+  if (id === 'mage') return '法師';
+  return '騎士';
+}
+
+function pieceLabel(id: ClassId): string {
+  // 全名優先；兩字皆可塞進棋子
+  return classLabel(id);
+}
+
+function enrichCard(
+  instanceId: string,
+  cardId: string,
+  name: string,
+  countsTowardAction: boolean,
+  silenced: boolean,
+): HandCard {
+  return {
+    instanceId,
+    cardId,
+    name,
+    wired: WIRED_IDS.has(cardId),
+    countsTowardAction,
+    silenced,
+    sideHint: sideHintFor(cardId),
+  };
+}
 
 function buildGunnerHand(): HandCard[] {
   const ids: GunnerCardId[] = [
@@ -203,14 +195,14 @@ function buildGunnerHand(): HandCard[] {
     'big_show',
   ];
   return ids.map((cardId, i) => {
-    const inst = makeGunnerCard(cardId, `g-${i}-${cardId}`);
     const def = GUNNER_CARD_DEFS[cardId];
-    return {
-      instanceId: inst.instanceId,
+    return enrichCard(
+      `g-${i}-${cardId}`,
       cardId,
-      name: def.name,
-      wired: WIRED_IDS.has(cardId),
-    };
+      def.name,
+      def.countsTowardAction,
+      def.silenced,
+    );
   });
 }
 
@@ -225,14 +217,14 @@ function buildMageHand(): HandCard[] {
     'planar_swap',
   ];
   return ids.map((cardId, i) => {
-    const inst = makeMageCard(cardId, `m-${i}-${cardId}`);
     const def = MAGE_CARD_DEFS[cardId];
-    return {
-      instanceId: inst.instanceId,
+    return enrichCard(
+      `m-${i}-${cardId}`,
       cardId,
-      name: def.name,
-      wired: WIRED_IDS.has(cardId),
-    };
+      def.name,
+      def.countsTowardAction,
+      def.silenced,
+    );
   });
 }
 
@@ -247,27 +239,76 @@ function buildKnightHand(): HandCard[] {
     'undying',
   ];
   return ids.map((cardId, i) => {
-    const inst = makeKnightCard(cardId, `k-${i}-${cardId}`);
     const def = KNIGHT_CARD_DEFS[cardId];
-    return {
-      instanceId: inst.instanceId,
+    return enrichCard(
+      `k-${i}-${cardId}`,
       cardId,
-      name: def.name,
-      wired: WIRED_IDS.has(cardId),
-    };
+      def.name,
+      def.countsTowardAction,
+      def.silenced,
+    );
   });
 }
 
-function buildHand(demo: DemoClass): HandCard[] {
-  if (demo === 'gunner') return buildGunnerHand();
-  if (demo === 'mage') return buildMageHand();
+function buildHand(id: ClassId): HandCard[] {
+  if (id === 'gunner') return buildGunnerHand();
+  if (id === 'mage') return buildMageHand();
   return buildKnightHand();
 }
 
-function demoLabel(demo: DemoClass): string {
-  if (demo === 'gunner') return '槍手 demo';
-  if (demo === 'mage') return '法師 demo';
-  return '騎士 demo';
+function makeDrawStubCard(id: ClassId, seq: number): HandCard {
+  const cardId =
+    id === 'gunner' ? 'shot' : id === 'mage' ? 'magic_arrow' : 'attack';
+  const def =
+    id === 'gunner'
+      ? GUNNER_CARD_DEFS.shot
+      : id === 'mage'
+        ? MAGE_CARD_DEFS.magic_arrow
+        : KNIGHT_CARD_DEFS.attack;
+  return enrichCard(
+    `draw-${id}-${seq}-${cardId}`,
+    cardId,
+    def.name,
+    def.countsTowardAction,
+    def.silenced,
+  );
+}
+
+function applyHandCap(
+  id: ClassId,
+  hand: HandCard[],
+): { hand: HandCard[]; discarded: HandCard[] } {
+  const cap = HAND_CAP[id];
+  if (hand.length <= cap) return { hand, discarded: [] };
+  const keep = hand.slice(0, cap);
+  const discarded = hand.slice(cap);
+  return { hand: keep, discarded };
+}
+
+function freshActor(id: ClassId, hex: Axial): ClassActor {
+  const { hand } = applyHandCap(id, buildHand(id));
+  return {
+    hex,
+    hand,
+    movesLeft: TURN_MOVES_PER_ROUND,
+    actionsLeft: TURN_ACTIONS_PER_ROUND,
+    moveLocked: false,
+    hasMovedThisTurn: false,
+    endedThisRound: false,
+    ammo: EMPTY_AMMO_SLOT,
+    amplifiedPending: false,
+    mayPlayShotIgnoreRange: false,
+    curseStacks: id === 'knight' ? 2 : 0,
+    drawSeq: 0,
+  };
+}
+
+function bootActors(hexes: Record<ClassId, Axial>): Actors {
+  const actors = {} as Actors;
+  for (const id of CLASS_ORDER) {
+    actors[id] = freshActor(id, hexes[id]);
+  }
+  return actors;
 }
 
 function formatEvents(events: ReadonlyArray<{ type: string }>): string {
@@ -310,20 +351,16 @@ function bottleFailReason(reason: string | undefined): string {
   return reason ?? '未知失敗';
 }
 
-function lookupCountsTowardAction(demo: DemoClass, cardId: string): boolean {
-  if (demo === 'gunner') {
-    const def = GUNNER_CARD_DEFS[cardId as GunnerCardId];
-    return def?.countsTowardAction ?? false;
+function lookupCountsTowardAction(id: ClassId, cardId: string): boolean {
+  if (id === 'gunner') {
+    return GUNNER_CARD_DEFS[cardId as GunnerCardId]?.countsTowardAction ?? false;
   }
-  if (demo === 'mage') {
-    const def = MAGE_CARD_DEFS[cardId as MageCardId];
-    return def?.countsTowardAction ?? false;
+  if (id === 'mage') {
+    return MAGE_CARD_DEFS[cardId as MageCardId]?.countsTowardAction ?? false;
   }
-  const def = KNIGHT_CARD_DEFS[cardId as KnightCardId];
-  return def?.countsTowardAction ?? false;
+  return KNIGHT_CARD_DEFS[cardId as KnightCardId]?.countsTowardAction ?? false;
 }
 
-/** 鄰格可站？含盟友佔格阻擋（解鎖「無法續走」用）。 */
 function hasStandableNeighbor(
   board: Board,
   hex: Axial,
@@ -332,12 +369,6 @@ function hasStandableNeighbor(
   return neighbors(hex).some((n) => canStandAt(board, n, { occupied }));
 }
 
-/** 走路／預覽共用：其他單位佔格（不含自己）。 */
-function walkOccupied(allyHex: Axial): Axial[] {
-  return [allyHex];
-}
-
-/** 從 from 往 toward 是否在軸向直線；是則回傳單位方向。 */
 function axialDirectionToward(from: Axial, toward: Axial): Axial | null {
   if (equals(from, toward)) return null;
   for (const dir of AXIAL_DIRECTIONS) {
@@ -361,105 +392,188 @@ function pendingHint(p: PendingPlay | null): string {
   }
   if (p.kind === 'heroic_charge') return '指定衝鋒方向：點直線上任一格（或鄰格）';
   if (p.kind === 'undying') return '指定復活落點（可站格）';
-  if (p.kind === 'devotion') return '指定鄰 1 隊友格（吸咒）';
+  if (p.kind === 'devotion') return '指定鄰 1 友軍格（吸咒）';
   return '';
 }
 
-const INITIAL_SESSION = (() => {
-  const boot = bootMatch();
-  let hand = buildGunnerHand();
-  let drawSeq = 0;
-  let lastDraw = '';
-  const logs = [
-    '薄 UI：結束回合接 core/turn；王 HP 12；射擊→結束→看王牆→再結束→老化。',
-  ];
-  for (const e of boot.events) {
-    if (e.type === 'DrawStub' && e.actorId === ACTOR_PLAYER) {
-      const card = makeDrawStubCard('gunner', drawSeq);
-      hand = [...hand, card];
-      lastDraw = card.name;
-      drawSeq += 1;
-      logs.push(`【DrawStub】開局入手 ${card.name}`);
-    } else if (e.type === 'RoundStarted') {
-      logs.push(`【match】RoundStarted round=${e.roundIndex}`);
-    } else if (e.type === 'TurnStarted') {
-      logs.push(`【match】TurnStarted ${e.actorId}`);
-    }
+function occupiedExcept(actors: Actors, self: ClassId): Axial[] {
+  return CLASS_ORDER.filter((id) => id !== self).map((id) => actors[id].hex);
+}
+
+function allHexes(actors: Actors): Axial[] {
+  return CLASS_ORDER.map((id) => actors[id].hex);
+}
+
+function toThreatActors(actors: Actors): ThreatActor[] {
+  return CLASS_ORDER.map((id) => ({
+    id,
+    hex: actors[id].hex,
+    role: id === 'knight' ? 'melee' : 'ranged',
+    curseStacks: actors[id].curseStacks,
+  }));
+}
+
+function collectProtected(
+  taunt: BossPlaceRestriction | null,
+  barrier: BarrierAura | null,
+): Axial[] {
+  const out: Axial[] = [];
+  if (taunt?.type === 'taunt') {
+    for (const n of neighbors(taunt.center)) out.push(n);
   }
-  return { match: boot.state, hand, lastDraw, drawSeq, logs };
-})();
+  if (barrier?.protectedHexes) {
+    for (const h of barrier.protectedHexes) out.push(h);
+  }
+  return out;
+}
+
+function hasPlayableCard(actor: ClassActor, id: ClassId): boolean {
+  if (actor.actionsLeft <= 0 && !actor.mayPlayShotIgnoreRange) {
+    // 仍可能有不計次牌
+    return actor.hand.some((c) => !lookupCountsTowardAction(id, c.cardId));
+  }
+  return actor.hand.some((c) => {
+    const counted = lookupCountsTowardAction(id, c.cardId);
+    if (counted && actor.actionsLeft <= 0) {
+      return c.cardId === 'shot' && actor.mayPlayShotIgnoreRange;
+    }
+    return true;
+  });
+}
+
+const INITIAL_HEXES = { ...START_HEX };
+const INITIAL_ACTORS = bootActors(INITIAL_HEXES);
 
 export function App() {
+  const [phase, setPhase] = useState<Phase>('playing');
+  const [spawnStep, setSpawnStep] = useState(0); // 0騎 1槍 2法
+  const [spawnHexes, setSpawnHexes] = useState<Partial<Record<ClassId, Axial>>>(
+    {},
+  );
 
-  const [demo, setDemo] = useState<DemoClass>('gunner');
-  const [unitHex, setUnitHex] = useState<Axial>(START_UNIT_HEX);
-  const [allyHex, setAllyHex] = useState<Axial>(START_ALLY_HEX);
-  const [hand, setHand] = useState<HandCard[]>(() => INITIAL_SESSION.hand);
-  const [ammo, setAmmo] = useState<AmmoSlotState>(EMPTY_AMMO_SLOT);
-  const [amplifiedPending, setAmplifiedPending] = useState(false);
-  const [board, setBoard] = useState<Board>(() => createDemoBoard());
-  const [match, setMatch] = useState<MatchState>(() => INITIAL_SESSION.match);
+  const [selected, setSelected] = useState<ClassId>('gunner');
+  const [actors, setActors] = useState<Actors>(() => INITIAL_ACTORS);
+  const [board, setBoard] = useState<Board>(() => createOpeningBoard());
   const [bossHp, setBossHp] = useState(BOSS_HP_DEMO);
   const [won, setWon] = useState(false);
-  const [lastDraw, setLastDraw] = useState(() => INITIAL_SESSION.lastDraw);
-  const [drawSeq, setDrawSeq] = useState(() => INITIAL_SESSION.drawSeq);
-  /** 本玩家回合是否已造成有效王傷（結束時 MARK_BOSS_DAMAGED）。 */
-  const [dealtBossDamageThisTurn, setDealtBossDamageThisTurn] = useState(false);
-  const [log, setLog] = useState<string[]>(() => INITIAL_SESSION.logs);
+  const [roundIndex, setRoundIndex] = useState(0);
+  const [bossDamagedThisRound, setBossDamagedThisRound] = useState(false);
+  const [aging, setAging] = useState<Map<string, number>>(() => new Map());
+  const [wallsPlacedThisRound, setWallsPlacedThisRound] = useState<string[]>(
+    [],
+  );
+  const [log, setLog] = useState<string[]>(() => [
+    '薄 UI：三職業平衡試玩。開場老化牆。傷王即鋪牆；三人皆結束才進下一輪。',
+  ]);
   const [toast, setToast] = useState('');
-  const [movesLeft, setMovesLeft] = useState(TURN_MOVES_PER_ROUND);
-  const [actionsLeft, setActionsLeft] = useState(TURN_ACTIONS_PER_ROUND);
-  const [moveLocked, setMoveLocked] = useState(false);
-  const mustFinishMove = moveLocked;
-  const actorNow = currentActorId(match);
-  const roundDisplay = match.roundIndex;
-  /** 本回合是否已移動（走路／大亂流／衝鋒）；信仰／大招用。 */
-  const [hasMovedThisTurn, setHasMovedThisTurn] = useState(false);
-  /** 大招授旗：下一張手上射擊 ignoreRange 且不另扣行動。 */
-  const [mayPlayShotIgnoreRange, setMayPlayShotIgnoreRange] = useState(false);
   const [pendingPlay, setPendingPlay] = useState<PendingPlay | null>(null);
-  /** 滑鼠懸停格；App 算與 tryMoveTo 相同的走路路徑預覽。 */
   const [hoverHex, setHoverHex] = useState<Axial | null>(null);
-  /** 手牌懸停：僅預覽甜區等，不觸發 pendingPlay／出牌。 */
   const [hoveredCard, setHoveredCard] = useState<HandCard | null>(null);
-  /** 法師屏障光環 stub（僅日誌／狀態列）。 */
   const [barrierAura, setBarrierAura] = useState<BarrierAura | null>(null);
-  /** 騎士詛咒層（信仰／奉獻 demo）。 */
-  const [curseStacks, setCurseStacks] = useState(2);
-  const [allyCurseStacks, setAllyCurseStacks] = useState(1);
-  /** 嘲諷：他人回合開關。 */
-  const [isOthersTurn, setIsOthersTurn] = useState(false);
   const [tauntRestriction, setTauntRestriction] =
     useState<BossPlaceRestriction | null>(null);
-  /** 不死存在 demo 旗。 */
+  const [isOthersTurn, setIsOthersTurn] = useState(false);
   const [isDead, setIsDead] = useState(false);
   const [atRoundEndAfterActors, setAtRoundEndAfterActors] = useState(false);
+  const [allyCurseStacks, setAllyCurseStacks] = useState(1);
+  const [endConfirmFor, setEndConfirmFor] = useState<ClassId | null>(null);
+  const [lastDraw, setLastDraw] = useState('');
+
+  const me = actors[selected];
+  const unitHex = me.hex;
+  const hand = me.hand;
+  const movesLeft = me.movesLeft;
+  const actionsLeft = me.actionsLeft;
+  const moveLocked = me.moveLocked;
+  const mustFinishMove = moveLocked;
+  const hasMovedThisTurn = me.hasMovedThisTurn;
+  const ammo = me.ammo;
+  const amplifiedPending = me.amplifiedPending;
+  const mayPlayShotIgnoreRange = me.mayPlayShotIgnoreRange;
+  const curseStacks = me.curseStacks;
+
+  const allyId = useMemo(() => {
+    const others = CLASS_ORDER.filter((id) => id !== selected);
+    const adj = others.find(
+      (id) => distance(actors[selected].hex, actors[id].hex) === 1,
+    );
+    return adj ?? others[0]!;
+  }, [actors, selected]);
+  const allyHex = actors[allyId].hex;
 
   const ammoHint = useMemo(
     () => `裝填 dmg+${ammo.damageBonus} draw+${ammo.drawBonus}`,
     [ammo],
   );
 
-  /** 與 tryMoveTo 同一套規則：有路徑且步數 ≤ movesLeft 與回合上限才高亮。 */
   const hoverPath = useMemo(() => {
+    if (phase !== 'playing') return null;
     if (!hoverHex || pendingPlay) return null;
+    if (me.endedThisRound) return null;
     if (equals(hoverHex, unitHex)) return null;
     if (movesLeft <= 0) return null;
-    const occupied = walkOccupied(allyHex);
+    const occupied = occupiedExcept(actors, selected);
     const path = shortestPath(board, unitHex, hoverHex, { occupied });
     if (path === null) return null;
     const steps = path.length - 1;
     if (steps < 1) return null;
     if (steps > TURN_MOVES_PER_ROUND || steps > movesLeft) return null;
     return path;
-  }, [allyHex, board, hoverHex, movesLeft, pendingPlay, unitHex]);
+  }, [
+    actors,
+    board,
+    hoverHex,
+    me.endedThisRound,
+    movesLeft,
+    pendingPlay,
+    phase,
+    selected,
+    unitHex,
+  ]);
 
-  /** shot／magic_arrow 共用 computeRangedDamageToBoss 甜區；懸停只畫不結算。 */
   const showSweetZone =
     hoveredCard?.cardId === 'shot' || hoveredCard?.cardId === 'magic_arrow';
 
+  const boardActors: BoardActorView[] = CLASS_ORDER.map((id) => {
+    const a = actors[id];
+    const colors = a.endedThisRound
+      ? COLOR_END
+      : id === selected
+        ? COLOR_SEL
+        : COLOR_ACT;
+    return {
+      id,
+      label: pieceLabel(id),
+      hex: a.hex,
+      fill: colors.fill,
+      stroke: colors.stroke,
+    };
+  });
+
+  const spawnHint =
+    phase === 'spawn-pick'
+      ? `選出生點 ${spawnStep + 1}/3：請點可站空格放置「${classLabel(CLASS_ORDER[spawnStep]!)}」`
+      : null;
+
   function pushLog(line: string) {
     setLog((prev) => [...prev, line]);
+  }
+
+  function patchActor(id: ClassId, patch: Partial<ClassActor>) {
+    setActors((prev) => ({
+      ...prev,
+      [id]: { ...prev[id], ...patch },
+    }));
+  }
+
+  function updateActor(
+    id: ClassId,
+    updater: (a: ClassActor) => ClassActor,
+  ) {
+    setActors((prev) => ({
+      ...prev,
+      [id]: updater(prev[id]),
+    }));
   }
 
   function clearPending(note?: string) {
@@ -470,10 +584,23 @@ export function App() {
     }
   }
 
-  /** 扣王 HP；≤0 勝利並停玩。 */
+  function selectClass(id: ClassId) {
+    setSelected(id);
+    setPendingPlay(null);
+    setEndConfirmFor(null);
+    setHoveredCard(null);
+    if (actors[id].endedThisRound) {
+      setToast(`${classLabel(id)} 本輪已結束（唯讀）`);
+      pushLog(`【選取】${classLabel(id)}（已結束・唯讀）`);
+    } else {
+      setToast(`選取 ${classLabel(id)}`);
+    }
+  }
+
+  /** 有效傷王：扣 HP＋立刻威脅序鋪 1 plain。 */
   function noteBossDamage(amount: number) {
     if (amount <= 0 || won) return;
-    setDealtBossDamageThisTurn(true);
+    setBossDamagedThisRound(true);
     setBossHp((hp) => {
       const next = Math.max(0, hp - amount);
       if (next <= 0) {
@@ -483,256 +610,284 @@ export function App() {
       }
       return next;
     });
-  }
 
-  /** 玩家回合開始：重設移動／行動／鎖（保留裝填）。 */
-  function resetPlayerTurnUi() {
-    setMovesLeft(TURN_MOVES_PER_ROUND);
-    setActionsLeft(TURN_ACTIONS_PER_ROUND);
-    setMoveLocked(false);
-    setHasMovedThisTurn(false);
-    setAmplifiedPending(false);
-    setMayPlayShotIgnoreRange(false);
-    setPendingPlay(null);
-    setBarrierAura(null);
-    setTauntRestriction(null);
-    setAtRoundEndAfterActors(false);
-    setDealtBossDamageThisTurn(false);
-  }
-
-  /**
-   * 王回合 v0：鋪 1 未老化 plain＋REGISTER；零傷再鋪 punish；結束回合。
-   * 回傳更新後 match／board／事件（含可能的 RoundEnded／WallAged）。
-   */
-  function runBossTurnV0(
-    stateIn: MatchState,
-    boardIn: Board,
-    unit: Axial,
-    ally: Axial,
-  ): {
-    state: MatchState;
-    board: Board;
-    events: MatchEvent[];
-    logs: string[];
-    agingSnapshot: {
-      aging: ReadonlyMap<string, number>;
-      walls: readonly string[];
-      board: Board;
-    } | null;
-  } {
-    let state = stateIn;
-    let liveBoard = boardIn;
-    const events: MatchEvent[] = [];
-    const logs: string[] = [];
-
-    const plainHex = pickBossPlaceHex(liveBoard, unit, ally, null);
-    if (plainHex) {
-      liveBoard = placeTerrain(liveBoard, plainHex, 'plain');
-      const key = hexKey(plainHex);
-      const reg = applyCommand(state, {
-        type: 'REGISTER_WALL_PLACED',
-        hexKey: key,
-      });
-      state = reg.state;
-      events.push(...reg.events);
-      logs.push(
-        `【王】placeTerrain plain@(${plainHex.q},${plainHex.r}) + REGISTER_WALL_PLACED`,
+    // 立刻鋪牆（用當前 closure 的 board／actors）
+    const protectedHexes = collectProtected(tauntRestriction, barrierAura);
+    const picks = pickThreatPlacementHexes(board, toThreatActors(actors), 1, {
+      occupied: allHexes(actors),
+      protectedHexes,
+      bounds: { radius: DEFAULT_MAP_RADIUS },
+      exclude: wallsPlacedThisRound.map((k) => {
+        const [q, r] = k.split(',').map(Number);
+        return { q: q!, r: r! };
+      }),
+    });
+    const pick = picks[0];
+    if (pick) {
+      const nextBoard = placeTerrain(board, pick, 'plain');
+      setBoard(nextBoard);
+      const key = hexKey(pick);
+      setWallsPlacedThisRound((w) => [...w, key]);
+      pushLog(
+        `【王】受傷即鋪 plain@(${pick.q},${pick.r})（威脅序；可續走）`,
       );
     } else {
-      logs.push('【王】無空位可鋪 plain（skip）');
+      pushLog('【王】受傷但無空位可鋪 plain');
     }
+  }
 
-    if (!state.bossDamagedThisRound) {
-      const punishHex = pickBossPlaceHex(liveBoard, unit, ally, plainHex);
-      if (punishHex) {
-        liveBoard = placeTerrain(liveBoard, punishHex, 'punish');
-        logs.push(
-          `【王】PunishPlace／零傷 → punish@(${punishHex.q},${punishHex.r})`,
-        );
-      } else {
+
+  function finishRound(liveBoard: Board, liveActors: Actors, liveAging: Map<string, number>, liveWalls: string[], damaged: boolean) {
+    const logs: string[] = [];
+    let boardNow = liveBoard;
+    let agingNow = liveAging;
+
+    if (!damaged) {
+      const protectedHexes = collectProtected(tauntRestriction, barrierAura);
+      const picks = pickThreatPlacementHexes(
+        boardNow,
+        toThreatActors(liveActors),
+        PUNISH_PER_ZERO_DAMAGE,
+        {
+          occupied: allHexes(liveActors),
+          protectedHexes,
+          bounds: { radius: DEFAULT_MAP_RADIUS },
+        },
+      );
+      if (picks.length === 0) {
         logs.push('【王】懲罰跳過：無空位');
+      } else {
+        for (const h of picks) {
+          boardNow = placeTerrain(boardNow, h, 'punish');
+        }
+        logs.push(
+          `【王】PunishPlace／零傷 → ${picks.length} 格 ` +
+            picks.map((h) => `punish@(${h.q},${h.r})`).join('、'),
+        );
       }
     } else {
       logs.push('【王】本輪已傷王，不鋪 punish');
     }
 
-    // 輪末老化前快照（finishRound 會推進 registry，需另帶 board 寫 aged）
-    const agingSnapshot = {
-      aging: state.aging,
-      walls: state.wallsPlacedThisRound,
-      board: liveBoard,
-    };
-
-    const ended = applyCommand(state, {
-      type: 'END_ACTOR_TURN',
-      actorId: ACTOR_BOSS,
-    });
-    state = ended.state;
-    events.push(...ended.events);
-    logs.push(
-      `【王】結束回合 → events=${summarizeMatchEvents(ended.events)}`,
-    );
-
-    return { state, board: liveBoard, events, logs, agingSnapshot };
-  }
-
-  function switchDemo(next: DemoClass) {
-    const boot = bootMatch();
-    setDemo(next);
-    let nextHand = buildHand(next);
-    let seq = 0;
-    let drawName = '';
-    for (const e of boot.events) {
-      if (e.type === 'DrawStub' && e.actorId === ACTOR_PLAYER) {
-        const card = makeDrawStubCard(next, seq);
-        nextHand = [...nextHand, card];
-        drawName = card.name;
-        seq += 1;
-      }
+    const aged = advanceWallAging(agingNow, liveWalls, { board: boardNow });
+    agingNow = aged.aging;
+    if (aged.board) boardNow = aged.board;
+    if (aged.newlyAgedKeys.length > 0) {
+      logs.push(
+        `【老化】advanceWallAging → aged=[${aged.newlyAgedKeys.join(',')}]（標籤改「老化」）`,
+      );
     }
-    setHand(nextHand);
-    setMatch(boot.state);
-    setBoard(createDemoBoard());
-    setBossHp(BOSS_HP_DEMO);
-    setWon(false);
-    setLastDraw(drawName);
-    setDrawSeq(seq);
-    setDealtBossDamageThisTurn(false);
-    setAmmo(EMPTY_AMMO_SLOT);
-    setAmplifiedPending(false);
-    setMovesLeft(TURN_MOVES_PER_ROUND);
-    setActionsLeft(TURN_ACTIONS_PER_ROUND);
-    setMoveLocked(false);
-    setHasMovedThisTurn(false);
-    setMayPlayShotIgnoreRange(false);
-    setPendingPlay(null);
-    setHoveredCard(null);
+
+    const nextRound = roundIndex + 1;
+    logs.push(`【輪末】RoundEnded ${roundIndex} → 開 Round ${nextRound}`);
+
+    // 重置三人可行動；保留裝填；各抽 stub
+    const nextActors = { ...liveActors } as Actors;
+    const drawNames: string[] = [];
+    for (const id of CLASS_ORDER) {
+      const prev = liveActors[id];
+      let a: ClassActor = {
+        ...prev,
+        movesLeft: TURN_MOVES_PER_ROUND,
+        actionsLeft: TURN_ACTIONS_PER_ROUND,
+        moveLocked: false,
+        hasMovedThisTurn: false,
+        endedThisRound: false,
+        amplifiedPending: false,
+        mayPlayShotIgnoreRange: false,
+        // ammo 保留
+      };
+      const stub = makeDrawStubCard(id, a.drawSeq);
+      const merged = [...a.hand, stub];
+      const { hand: capped, discarded } = applyHandCap(id, merged);
+      a = {
+        ...a,
+        hand: capped,
+        drawSeq: a.drawSeq + 1,
+      };
+      if (discarded.length > 0) {
+        logs.push(
+          `【手牌上限】${classLabel(id)} 棄最新 ${discarded.map((c) => c.name).join('、')}`,
+        );
+      } else {
+        drawNames.push(`${classLabel(id)}:${stub.name}`);
+      }
+      // 若棄的是 stub 以外、stub 仍留下，也記抽到
+      if (discarded.length > 0 && capped.some((c) => c.instanceId === stub.instanceId)) {
+        drawNames.push(`${classLabel(id)}:${stub.name}`);
+      }
+      nextActors[id] = a;
+    }
+    if (drawNames.length) {
+      logs.push(`【DrawStub】${drawNames.join('；')}`);
+      setLastDraw(drawNames.join(' / '));
+    }
+
+    setBoard(boardNow);
+    setAging(agingNow);
+    setWallsPlacedThisRound([]);
+    setBossDamagedThisRound(false);
+    setRoundIndex(nextRound);
+    setActors(nextActors);
     setBarrierAura(null);
     setTauntRestriction(null);
-    setCurseStacks(2);
-    setAllyCurseStacks(1);
-    setIsOthersTurn(false);
-    setIsDead(false);
-    setAtRoundEndAfterActors(false);
-    setUnitHex(START_UNIT_HEX);
-    setAllyHex(START_ALLY_HEX);
-    pushLog(
-      `【切換】→ ${demoLabel(next)}（重建 match／手牌；DrawStub=${drawName || '無'}）`,
-    );
-    setToast(`切換 ${demoLabel(next)}`);
+    setEndConfirmFor(null);
+    setPendingPlay(null);
+    for (const line of logs) pushLog(line);
+    setToast(`第 ${nextRound} 輪開始（三人可行動）`);
   }
 
-  function endTurn(reason = '玩家結束') {
+  function endTurn(reason = '結束回合', opts?: { force?: boolean }) {
     if (won) {
       pushLog('【結束回合】已勝利，停止操作');
       setToast('已勝利');
       return;
     }
-    if (currentActorId(match) !== ACTOR_PLAYER) {
-      pushLog(`【結束回合】拒絕：目前行動者=${currentActorId(match)}`);
-      setToast('非玩家回合');
+    if (phase !== 'playing') return;
+    const id = selected;
+    const actor = actors[id];
+    if (actor.endedThisRound) {
+      pushLog(`【結束回合】${classLabel(id)} 本輪已結束`);
+      setToast('本輪已結束');
       return;
     }
 
-    let state = match;
-    let liveBoard = board;
-    const allEvents: MatchEvent[] = [];
-    const extraLogs: string[] = [];
+    const stillMoves = actor.movesLeft > 0;
+    const stillPlay =
+      actor.actionsLeft > 0 && hasPlayableCard(actor, id);
+    // 不計次且 actions 用完仍可能有可出牌
+    const stillUncounted =
+      hasPlayableCard(actor, id) &&
+      actor.hand.some((c) => !lookupCountsTowardAction(id, c.cardId));
+    const canStillAct =
+      stillMoves ||
+      (actor.actionsLeft > 0 && hasPlayableCard(actor, id)) ||
+      stillUncounted;
 
-    if (dealtBossDamageThisTurn) {
-      const marked = applyCommand(state, { type: 'MARK_BOSS_DAMAGED' });
-      state = marked.state;
-      allEvents.push(...marked.events);
-      extraLogs.push('【結束回合】MARK_BOSS_DAMAGED');
+    if (!opts?.force && canStillAct && endConfirmFor !== id) {
+      setEndConfirmFor(id);
+      const msg = '還可移動／出牌';
+      pushLog(`【結束回合】${classLabel(id)} 提醒：${msg}（再點一次確認）`);
+      setToast(msg);
+      return;
     }
 
-    const playerEnd = applyCommand(state, {
-      type: 'END_ACTOR_TURN',
-      actorId: ACTOR_PLAYER,
-    });
-    state = playerEnd.state;
-    allEvents.push(...playerEnd.events);
-    extraLogs.push(
-      `【結束回合】${reason} → ${summarizeMatchEvents(playerEnd.events)}`,
-    );
+    setEndConfirmFor(null);
+    const nextActors: Actors = {
+      ...actors,
+      [id]: { ...actor, endedThisRound: true, moveLocked: false },
+    };
+    setActors(nextActors);
+    pushLog(`【結束回合】${classLabel(id)}／${reason}`);
+    setToast(`${classLabel(id)} 結束（灰）`);
+    setPendingPlay(null);
 
-    // 王回合自動（scripted v0）
-    if (currentActorId(state) === ACTOR_BOSS) {
-      const boss = runBossTurnV0(state, liveBoard, unitHex, allyHex);
-      state = boss.state;
-      liveBoard = boss.board;
-      allEvents.push(...boss.events);
-      extraLogs.push(...boss.logs);
-
-      const roundEnded = boss.events.some((e) => e.type === 'RoundEnded');
-      if (roundEnded && boss.agingSnapshot) {
-        const aged = advanceWallAging(
-          boss.agingSnapshot.aging,
-          boss.agingSnapshot.walls,
-          { board: boss.agingSnapshot.board },
-        );
-        if (aged.board) liveBoard = aged.board;
-        if (aged.newlyAgedKeys.length > 0) {
-          extraLogs.push(
-            `【老化】advanceWallAging → aged=[${aged.newlyAgedKeys.join(',')}]`,
-          );
-        }
-      }
+    const allEnded = CLASS_ORDER.every((c) => nextActors[c].endedThisRound);
+    if (allEnded) {
+      finishRound(
+        board,
+        nextActors,
+        aging,
+        wallsPlacedThisRound,
+        bossDamagedThisRound,
+      );
     }
+  }
 
-    setMatch(state);
-    setBoard(liveBoard);
+  function beginSpawnPick() {
+    setPhase('spawn-pick');
+    setSpawnStep(0);
+    setSpawnHexes({});
+    setBoard(createOpeningBoard());
+    setWon(false);
+    setBossHp(BOSS_HP_DEMO);
+    setRoundIndex(0);
+    setBossDamagedThisRound(false);
+    setAging(new Map());
+    setWallsPlacedThisRound([]);
+    setPendingPlay(null);
+    setEndConfirmFor(null);
+    setHoverHex(null);
+    setBarrierAura(null);
+    setTauntRestriction(null);
+    setLog(['重製對局：開場盤。依序點 騎士 → 槍手 → 法師 出生格。']);
+    setToast('請點騎士出生格');
+  }
 
-    // 處理抽牌／玩家回合開始
-    let seq = drawSeq;
-    let drew = '';
-    for (const e of allEvents) {
-      if (e.type === 'DrawStub' && e.actorId === ACTOR_PLAYER) {
-        const card = makeDrawStubCard(demo, seq);
-        setHand((prev) => [...prev, card]);
-        drew = card.name;
-        seq += 1;
-      }
-      if (e.type === 'TurnStarted' && e.actorId === ACTOR_PLAYER) {
-        resetPlayerTurnUi();
-      }
-      if (e.type === 'PunishPlace') {
-        extraLogs.push('【事件】PunishPlace（零傷意圖；王回合已處理）');
-      }
-      if (e.type === 'WallAged') {
-        extraLogs.push(`【事件】WallAged ${e.hexKey}`);
-      }
+  function completeSpawnAndStart(hexes: Record<ClassId, Axial>) {
+    const next = bootActors(hexes);
+    setActors(next);
+    setSelected('gunner');
+    setPhase('playing');
+    setSpawnHexes({});
+    setSpawnStep(0);
+    setBoard(createOpeningBoard());
+    setBossHp(BOSS_HP_DEMO);
+    setWon(false);
+    setRoundIndex(0);
+    setBossDamagedThisRound(false);
+    setAging(new Map());
+    setWallsPlacedThisRound([]);
+    setLog([
+      '薄 UI：三職業平衡試玩。出生完成。傷王即鋪牆；三人皆結束才進下一輪。',
+      `【出生】騎(${hexes.knight.q},${hexes.knight.r}) 槍(${hexes.gunner.q},${hexes.gunner.r}) 法(${hexes.mage.q},${hexes.mage.r})`,
+    ]);
+    setToast('對局開始');
+  }
+
+  function onSpawnClick(hex: Axial) {
+    const id = CLASS_ORDER[spawnStep]!;
+    const taken = Object.values(spawnHexes) as Axial[];
+    if (equals(hex, BOSS_HEX)) {
+      setToast('不可選王格');
+      return;
     }
-    if (drew) {
-      setLastDraw(drew);
-      setDrawSeq(seq);
-      extraLogs.push(`【DrawStub】入手 ${drew}`);
+    if (getTile(board, hex)) {
+      setToast('不可選有地形的格');
+      return;
     }
-
-    for (const line of extraLogs) pushLog(line);
-    setToast(
-      `輪 ${state.roundIndex} · 行動者 ${currentActorId(state) ?? '—'}（裝填保留）`,
-    );
+    if (!canStandAt(board, hex, { occupied: taken })) {
+      setToast('不可站此格');
+      return;
+    }
+    if (taken.some((t) => equals(t, hex))) {
+      setToast('不可重複');
+      return;
+    }
+    const next = { ...spawnHexes, [id]: hex };
+    setSpawnHexes(next);
+    pushLog(`【出生】${classLabel(id)} → (${hex.q},${hex.r})`);
+    if (spawnStep >= 2) {
+      completeSpawnAndStart(next as Record<ClassId, Axial>);
+    } else {
+      setSpawnStep(spawnStep + 1);
+      setToast(`請點${classLabel(CLASS_ORDER[spawnStep + 1]!)}出生格`);
+    }
   }
 
   function spendActionIfCounted(cardId: string) {
-    if (!lookupCountsTowardAction(demo, cardId)) return;
-    setActionsLeft((n) => Math.max(0, n - 1));
+    if (!lookupCountsTowardAction(selected, cardId)) return;
+    patchActor(selected, {
+      actionsLeft: Math.max(0, actors[selected].actionsLeft - 1),
+    });
   }
 
   function removeFromHand(...instanceIds: string[]) {
     const drop = new Set(instanceIds.filter(Boolean));
-    setHand((prev) => prev.filter((c) => !drop.has(c.instanceId)));
+    updateActor(selected, (a) => ({
+      ...a,
+      hand: a.hand.filter((c) => !drop.has(c.instanceId)),
+    }));
   }
 
-  /** 走路移動（無 pending 時）。 */
   function tryMoveTo(hex: Axial) {
     if (won) {
       setToast('已勝利，停止操作');
       return;
     }
-    if (currentActorId(match) !== ACTOR_PLAYER) {
-      setToast('非玩家回合');
+    if (me.endedThisRound) {
+      setToast('本輪已結束（唯讀）');
+      pushLog('【移動】拒絕：本輪已結束');
       return;
     }
     const tileDesc = describeHex(board, hex);
@@ -746,18 +901,19 @@ export function App() {
 
     if (movesLeft <= 0) {
       const msg = '本回合移動已用完';
-      pushLog(`${base} → ${msg}（點「結束回合」重置）`);
+      pushLog(`${base} → ${msg}`);
       setToast(msg);
       return;
     }
 
-    const occupied = walkOccupied(allyHex);
+    const occupied = occupiedExcept(actors, selected);
     const path = shortestPath(board, unitHex, hex, { occupied });
     if (path === null) {
+      const hitOther = occupied.some((o) => equals(o, hex));
       const why = equals(hex, BOSS_HEX)
         ? '不可站王格'
-        : equals(hex, allyHex)
-          ? '不可站隊友格'
+        : hitOther
+          ? '不可站其他職業格'
           : `不可達或不可站：${tileDesc}`;
       pushLog(`${base} → 移動拒絕（${why}）`);
       setToast(`無法移動：${why}`);
@@ -785,11 +941,7 @@ export function App() {
 
     const from = unitHex;
     const dest = path[path.length - 1]!;
-    setUnitHex(dest);
-    setHasMovedThisTurn(true);
     const left = movesLeft - steps;
-    setMovesLeft(left);
-
     let nextLocked = true;
     let stuckUnlock = false;
     if (left <= 0) {
@@ -798,7 +950,13 @@ export function App() {
       nextLocked = false;
       stuckUnlock = true;
     }
-    setMoveLocked(nextLocked);
+    patchActor(selected, {
+      hex: dest,
+      hasMovedThisTurn: true,
+      movesLeft: left,
+      moveLocked: nextLocked,
+    });
+    setEndConfirmFor(null);
 
     const via =
       steps === 2
@@ -810,7 +968,7 @@ export function App() {
         ? ''
         : ' · 移動完成，可出牌';
     pushLog(
-      `【移動】(${from.q},${from.r}) → (${dest.q},${dest.r})` +
+      `【移動】${classLabel(selected)} (${from.q},${from.r}) → (${dest.q},${dest.r})` +
         `（${via} · 剩餘移動 ${left}${lockNote}）`,
     );
     if (stuckUnlock) pushLog('無法續走，解鎖出牌');
@@ -823,8 +981,11 @@ export function App() {
     );
   }
 
-  function completeTurbulence(hex: Axial, pending: Extract<PendingPlay, { kind: 'turbulence' }>) {
-    const occupied = walkOccupied(allyHex);
+  function completeTurbulence(
+    hex: Axial,
+    pending: Extract<PendingPlay, { kind: 'turbulence' }>,
+  ) {
+    const occupied = occupiedExcept(actors, selected);
     const full = shortestPath(board, unitHex, hex, { occupied });
     if (full === null) {
       pushLog(`【大亂流】目標不可達／不可站 (${hex.q},${hex.r})`);
@@ -851,15 +1012,25 @@ export function App() {
       setToast(`大亂流失敗：${result.reason}`);
       return;
     }
-    setUnitHex(result.actorPosition);
-    setHasMovedThisTurn(true);
-    removeFromHand(pending.card.instanceId, ...result.discardedBottleIds);
-    spendActionIfCounted('turbulence');
+    updateActor(selected, (a) => {
+      const drop = new Set([
+        pending.card.instanceId,
+        ...result.discardedBottleIds,
+      ]);
+      return {
+        ...a,
+        hex: result.actorPosition,
+        hasMovedThisTurn: true,
+        hand: a.hand.filter((c) => !drop.has(c.instanceId)),
+        actionsLeft: lookupCountsTowardAction(selected, 'turbulence')
+          ? Math.max(0, a.actionsLeft - 1)
+          : a.actionsLeft,
+      };
+    });
     setPendingPlay(null);
-    // 大亂流不算走路額度；不改 movesLeft／moveLocked（仍擋於鎖中開始）
     pushLog(
       `【大亂流】→ (${result.actorPosition.q},${result.actorPosition.r})` +
-        ` steps=${result.steps} 棄氣瓶=${result.discardedBottleIds.join(',') || '無'}` +
+        ` steps=${result.steps}` +
         ` / events=${formatEvents(result.events)}`,
     );
     setToast(`大亂流：落到 (${result.actorPosition.q},${result.actorPosition.r})`);
@@ -890,10 +1061,10 @@ export function App() {
       from,
       direction,
       amplified: usedAmp,
-      actors: [
-        { id: 'self', hex: unitHex },
-        { id: 'ally', hex: allyHex },
-      ],
+      actors: CLASS_ORDER.map((id) => ({
+        id,
+        hex: actors[id].hex,
+      })),
     });
     if (!result.ok) {
       pushLog(`【御風術】失敗：${result.reason}`);
@@ -901,9 +1072,14 @@ export function App() {
       return;
     }
     setBoard(result.board);
-    setAmplifiedPending(false);
-    removeFromHand(card.instanceId);
-    spendActionIfCounted('wind');
+    updateActor(selected, (a) => ({
+      ...a,
+      amplifiedPending: false,
+      hand: a.hand.filter((c) => c.instanceId !== card.instanceId),
+      actionsLeft: lookupCountsTowardAction(selected, 'wind')
+        ? Math.max(0, a.actionsLeft - 1)
+        : a.actionsLeft,
+    }));
     setPendingPlay(null);
     pushLog(
       `【御風術】(${from.q},${from.r}) → (${result.finalHex?.q},${result.finalHex?.r})` +
@@ -924,7 +1100,6 @@ export function App() {
       setToast('請點直線上的格（或鄰格）');
       return;
     }
-    // 薄 demo：不傳 units，避免撞隊友落地複雜度；直線衝到邊／硬停
     const final = resolveHeroicCharge({
       board,
       actorPosition: unitHex,
@@ -934,23 +1109,28 @@ export function App() {
       pushLog(`【英勇衝鋒】失敗：${final.reason}`);
       setToast(`衝鋒失敗：${final.reason}`);
       setPendingPlay(null);
-      if (final.forceEndTurn) endTurn('英勇衝鋒失敗強制結束');
+      if (final.forceEndTurn) endTurn('英勇衝鋒失敗強制結束', { force: true });
       return;
     }
     setBoard(final.board);
-    setUnitHex(final.actorPosition);
-    setHasMovedThisTurn(true);
-    removeFromHand(card.instanceId);
-    spendActionIfCounted('heroic_charge');
+    updateActor(selected, (a) => ({
+      ...a,
+      hex: final.actorPosition,
+      hasMovedThisTurn: true,
+      hand: a.hand.filter((c) => c.instanceId !== card.instanceId),
+      actionsLeft: lookupCountsTowardAction(selected, 'heroic_charge')
+        ? Math.max(0, a.actionsLeft - 1)
+        : a.actionsLeft,
+    }));
     setPendingPlay(null);
     noteBossDamage(final.bossDamage);
     pushLog(
       `【英勇衝鋒】→ (${final.actorPosition.q},${final.actorPosition.r})` +
-        ` bossDamage=${final.bossDamage} hitBoss=${final.hitBoss}` +
+        ` bossDamage=${final.bossDamage}` +
         ` / events=${formatEvents(final.events)}`,
     );
     setToast(`衝鋒至 (${final.actorPosition.q},${final.actorPosition.r})`);
-    if (final.forceEndTurn) endTurn('英勇衝鋒強制結束');
+    if (final.forceEndTurn) endTurn('英勇衝鋒強制結束', { force: true });
   }
 
   function completeUndying(hex: Axial, card: HandCard) {
@@ -967,27 +1147,31 @@ export function App() {
       return;
     }
     setBoard(result.board);
-    setUnitHex(result.actorPosition!);
+    updateActor(selected, (a) => ({
+      ...a,
+      hex: result.actorPosition!,
+      hand: a.hand.filter((c) => c.instanceId !== card.instanceId),
+    }));
     setIsDead(false);
-    removeFromHand(card.instanceId);
     setPendingPlay(null);
     pushLog(
       `【不死存在】復活於 (${result.actorPosition!.q},${result.actorPosition!.r})` +
         ` / events=${formatEvents(result.events)}`,
     );
     setToast(`復活於 (${result.actorPosition!.q},${result.actorPosition!.r})`);
-    if (result.forceEndTurn) endTurn('不死存在強制結束');
+    if (result.forceEndTurn) endTurn('不死存在強制結束', { force: true });
   }
 
   function completeDevotion(hex: Axial, card: HandCard) {
-    if (!equals(hex, allyHex)) {
-      pushLog(`【奉獻】請點隊友格 (${allyHex.q},${allyHex.r})`);
-      setToast('請點隊友標記格');
+    const targetId = CLASS_ORDER.find((id) => equals(actors[id].hex, hex));
+    if (!targetId || targetId === selected) {
+      pushLog('【奉獻】請點其他職業棋子格');
+      setToast('請點友軍格');
       return;
     }
     const result = resolveDevotion({
       actorHex: unitHex,
-      allyHex,
+      allyHex: hex,
       selfCurseStacks: curseStacks,
       allyCurseStacks,
     });
@@ -997,12 +1181,19 @@ export function App() {
       setPendingPlay(null);
       return;
     }
-    setCurseStacks(result.selfCurseStacks);
+    updateActor(selected, (a) => ({
+      ...a,
+      curseStacks: result.selfCurseStacks,
+      hand: a.hand.filter((c) => c.instanceId !== card.instanceId),
+    }));
+    updateActor(targetId, (a) => ({
+      ...a,
+      curseStacks: result.allyCurseStacks,
+    }));
     setAllyCurseStacks(result.allyCurseStacks);
-    removeFromHand(card.instanceId);
     setPendingPlay(null);
     pushLog(
-      `【奉獻】自己咒 ${result.selfCurseStacks}／隊友 ${result.allyCurseStacks}` +
+      `【奉獻】自己咒 ${result.selfCurseStacks}／友 ${result.allyCurseStacks}` +
         (result.extractedUndying ? ' · 抽出不死' : '') +
         ` / events=${formatEvents(result.events)}`,
     );
@@ -1013,7 +1204,10 @@ export function App() {
   }
 
   function onHexClick(hex: Axial) {
-    // 指定模式優先：完成牌目標，不走移動
+    if (phase === 'spawn-pick') {
+      onSpawnClick(hex);
+      return;
+    }
     if (pendingPlay) {
       if (pendingPlay.kind === 'turbulence') {
         completeTurbulence(hex, pendingPlay);
@@ -1045,7 +1239,7 @@ export function App() {
 
   function onPlay(card: HandCard) {
     const attacker = unitHex;
-    const counts = lookupCountsTowardAction(demo, card.cardId);
+    const counts = lookupCountsTowardAction(selected, card.cardId);
     const bonusShot =
       card.cardId === 'shot' && mayPlayShotIgnoreRange === true;
 
@@ -1054,65 +1248,54 @@ export function App() {
       setToast('已勝利');
       return;
     }
-    if (currentActorId(match) !== ACTOR_PLAYER) {
-      pushLog(`【${card.name}】非玩家回合（${currentActorId(match)}）`);
-      setToast('非玩家回合');
+    if (me.endedThisRound) {
+      pushLog(`【${card.name}】本輪已結束（唯讀）`);
+      setToast('本輪已結束（唯讀）');
       return;
     }
-
     if (pendingPlay) {
       pushLog(`【${card.name}】請先完成或取消目前指定（${pendingPlay.kind}）`);
       setToast('請先完成／取消指定');
       return;
     }
-
     if (mustFinishMove) {
       const msg = '移動中，請先走完再出牌';
       pushLog(`【${card.name}】→ ${msg}（剩餘移動 ${movesLeft}）`);
       setToast(msg);
       return;
     }
-
-    // 大招後續射擊不另扣行動額度
     if (counts && actionsLeft <= 0 && !bonusShot) {
       const msg = '本回合行動已用完';
-      pushLog(`【${card.name}】→ ${msg}（點「結束回合」重置）`);
+      pushLog(`【${card.name}】→ ${msg}`);
       setToast(msg);
       return;
     }
 
-    // —— 槍手：射擊 ——
     if (card.cardId === 'shot') {
       const result = resolveGunnerShot({
         attacker,
         ammo,
         ignoreRangePenalty: bonusShot,
       });
-      setAmmo(result.ammo);
-      removeFromHand(card.instanceId);
-      if (bonusShot) {
-        setMayPlayShotIgnoreRange(false);
-      } else {
-        spendActionIfCounted(card.cardId);
-      }
-      const line =
-        `【射擊】attacker=(${attacker.q},${attacker.r}) → ` +
-        `bossDamage=${result.bossDamage}` +
-        ` / 甜區=${result.inSweetZone ? '是' : '否'}` +
-        (bonusShot ? ' / 大招 ignoreRange' : '') +
-        ` / drawFromAmmo=${result.drawFromAmmo}` +
-        ` / events=${formatEvents(result.events)}`;
+      updateActor(selected, (a) => ({
+        ...a,
+        ammo: result.ammo,
+        mayPlayShotIgnoreRange: bonusShot ? false : a.mayPlayShotIgnoreRange,
+        hand: a.hand.filter((c) => c.instanceId !== card.instanceId),
+        actionsLeft:
+          bonusShot || !counts
+            ? a.actionsLeft
+            : Math.max(0, a.actionsLeft - 1),
+      }));
       noteBossDamage(result.bossDamage);
-      pushLog(line);
-      setToast(
-        `射擊：王傷 ${result.bossDamage}` +
-          (bonusShot ? '（大招免費射）' : '') +
-          (result.drawFromAmmo > 0 ? `（應抽 ${result.drawFromAmmo}）` : ''),
+      pushLog(
+        `【射擊】attacker=(${attacker.q},${attacker.r}) → bossDamage=${result.bossDamage}` +
+          ` / events=${formatEvents(result.events)}`,
       );
+      setToast(`射擊：王傷 ${result.bossDamage}`);
       return;
     }
 
-    // —— 氣瓶 ——
     if (card.cardId === 'playful_bottle' || card.cardId === 'mischief_bottle') {
       const input = { ammo, hand: toGunnerInstances(hand) };
       const result =
@@ -1125,22 +1308,23 @@ export function App() {
         setToast(`${card.name} 失敗：${why}`);
         return;
       }
-      setAmmo(result.ammo);
-      removeFromHand(card.instanceId, result.discardedShotId ?? '');
+      updateActor(selected, (a) => {
+        const drop = new Set(
+          [card.instanceId, result.discardedShotId ?? ''].filter(Boolean),
+        );
+        return {
+          ...a,
+          ammo: result.ammo,
+          hand: a.hand.filter((c) => !drop.has(c.instanceId)),
+        };
+      });
       pushLog(
-        `【${card.name}】OK → 裝填 dmg+${result.ammo.damageBonus}` +
-          ` draw+${result.ammo.drawBonus}` +
-          ` / 棄射擊=${result.discardedShotId}` +
-          ` / events=${formatEvents(result.events)}`,
+        `【${card.name}】OK → 裝填 dmg+${result.ammo.damageBonus} draw+${result.ammo.drawBonus}`,
       );
-      setToast(
-        `${card.name}：裝填 dmg+${result.ammo.damageBonus} draw+${result.ammo.drawBonus}` +
-          '（不計次）',
-      );
+      setToast(`${card.name}：裝填（不計次）`);
       return;
     }
 
-    // —— 大亂流：進指定終點 ——
     if (card.cardId === 'turbulence') {
       const bottles = hand.filter(
         (c) =>
@@ -1152,14 +1336,11 @@ export function App() {
         .map((c) => c.instanceId);
       const steps = discardBottleIds.length + TURBULENCE_MOVE_BASE;
       setPendingPlay({ kind: 'turbulence', card, discardBottleIds, steps });
-      pushLog(
-        `【大亂流】進入指定：將棄氣瓶 ${discardBottleIds.length} 張 → 須走 ${steps} 步；點終點格`,
-      );
+      pushLog(`【大亂流】進入指定：須走 ${steps} 步`);
       setToast(`大亂流：點恰好 ${steps} 步的終點`);
       return;
     }
 
-    // —— Power UP!!：薄 demo 固定 temp_shot ——
     if (card.cardId === 'power_up') {
       const result = resolvePowerUp({
         mode: 'temp_shot',
@@ -1171,21 +1352,18 @@ export function App() {
         setToast(`Power UP 失敗：${result.reason}`);
         return;
       }
-      if (result.ammo) setAmmo(result.ammo);
-      removeFromHand(card.instanceId);
-      spendActionIfCounted(card.cardId);
+      updateActor(selected, (a) => ({
+        ...a,
+        ammo: result.ammo ?? a.ammo,
+        hand: a.hand.filter((c) => c.instanceId !== card.instanceId),
+        actionsLeft: counts ? Math.max(0, a.actionsLeft - 1) : a.actionsLeft,
+      }));
       noteBossDamage(result.bossDamage ?? 0);
-      pushLog(
-        `【Power UP!!】temp_shot → bossDamage=${result.bossDamage}` +
-          ` 甜區=${result.inSweetZone ? '是' : '否'}` +
-          ` cannotBottle=${result.cannotBottleImmediately}` +
-          ` / events=${formatEvents(result.events)}`,
-      );
+      pushLog(`【Power UP!!】temp_shot → bossDamage=${result.bossDamage}`);
       setToast(`Power UP 臨時射擊：王傷 ${result.bossDamage ?? 0}`);
       return;
     }
 
-    // —— 來吧! 大鬧一場! ——
     if (card.cardId === 'big_show') {
       const result = resolveBigShow({
         hasMovedThisTurn,
@@ -1196,62 +1374,56 @@ export function App() {
         setToast(`大招失敗：${result.reason}`);
         return;
       }
-      setAmmo(result.ammo);
-      setMayPlayShotIgnoreRange(result.mayPlayShot && result.ignoreRangePenaltyForShot);
-      removeFromHand(card.instanceId);
-      spendActionIfCounted(card.cardId);
-      pushLog(
-        `【來吧! 大鬧一場!】OK 裝填 dmg+${result.ammo.damageBonus}` +
-          ` draw+${result.ammo.drawBonus}` +
-          ` mayPlayShot=${result.mayPlayShot}` +
-          ` ignoreRange=${result.ignoreRangePenaltyForShot}` +
-          ` / events=${formatEvents(result.events)}`,
-      );
+      updateActor(selected, (a) => ({
+        ...a,
+        ammo: result.ammo,
+        mayPlayShotIgnoreRange:
+          result.mayPlayShot && result.ignoreRangePenaltyForShot,
+        hand: a.hand.filter((c) => c.instanceId !== card.instanceId),
+        actionsLeft: counts ? Math.max(0, a.actionsLeft - 1) : a.actionsLeft,
+      }));
+      pushLog(`【來吧! 大鬧一場!】OK mayPlayShot=${result.mayPlayShot}`);
       setToast(
         result.mayPlayShot
-          ? '大招成功：請再打 1 張手上射擊（無視距離、不另扣行動）'
+          ? '大招成功：請再打 1 張手上射擊'
           : '大招成功',
       );
       return;
     }
 
-    // —— 強能增幅 ——
     if (card.cardId === 'amplify') {
       const result = resolveAmplify({ hand: toMageInstances(hand) });
-      setAmplifiedPending(result.amplifiedPending);
-      removeFromHand(card.instanceId);
-      pushLog(
-        `【強能增幅】armed → 下一張招 amplified / events=${formatEvents(result.events)}（不計次）`,
-      );
-      setToast('強能增幅：下一招吃加成（不計次）');
+      updateActor(selected, (a) => ({
+        ...a,
+        amplifiedPending: result.amplifiedPending,
+        hand: a.hand.filter((c) => c.instanceId !== card.instanceId),
+      }));
+      pushLog('【強能增幅】armed（不計次）');
+      setToast('強能增幅：下一招吃加成');
       return;
     }
 
-    // —— 魔法箭 ——
     if (card.cardId === 'magic_arrow') {
       const usedAmp = amplifiedPending;
       const result = resolveMagicArrow({
         attacker,
         amplified: usedAmp,
       });
-      setAmplifiedPending(false);
-      removeFromHand(card.instanceId);
-      spendActionIfCounted(card.cardId);
+      updateActor(selected, (a) => ({
+        ...a,
+        amplifiedPending: false,
+        hand: a.hand.filter((c) => c.instanceId !== card.instanceId),
+        actionsLeft: counts ? Math.max(0, a.actionsLeft - 1) : a.actionsLeft,
+      }));
       noteBossDamage(result.bossDamage);
       pushLog(
-        `【魔法箭】attacker=(${attacker.q},${attacker.r}) → ` +
-          `bossDamage=${result.bossDamage}` +
-          ` / 甜區=${result.inSweetZone ? '是' : '否'}` +
-          ` / amplified=${result.amplified ? '是' : '否'}` +
-          ` / events=${formatEvents(result.events)}`,
+        `【魔法箭】→ bossDamage=${result.bossDamage}` +
+          (usedAmp ? '（增幅）' : ''),
       );
-      setToast(
-        `魔法箭：王傷 ${result.bossDamage}` + (usedAmp ? '（已增幅）' : ''),
-      );
+      setToast(`魔法箭：王傷 ${result.bossDamage}`);
       return;
     }
 
-    // —— 御風術 ——
     if (card.cardId === 'wind') {
       setPendingPlay({ kind: 'wind_from', card });
       pushLog('【御風術】請點要推動的地形格，再點鄰格決定方向');
@@ -1259,33 +1431,32 @@ export function App() {
       return;
     }
 
-    // —— 聚精會神 ——
     if (card.cardId === 'focus') {
       const usedAmp = amplifiedPending;
       const result = resolveFocus({ amplified: usedAmp });
-      setAmplifiedPending(false);
-      removeFromHand(card.instanceId);
-      // 不計次；抽牌 stub
+      updateActor(selected, (a) => ({
+        ...a,
+        amplifiedPending: false,
+        hand: a.hand.filter((c) => c.instanceId !== card.instanceId),
+      }));
       pushLog(
         `【聚精會神】應抽 ${result.drawCount}` +
           (usedAmp ? '（增幅）' : '') +
-          ` endTurn=${result.endTurn}` +
-          ` / events=${formatEvents(result.events)}（抽牌 stub：僅日誌）`,
+          ` endTurn=${result.endTurn}`,
       );
-      setToast(`聚精：應抽 ${result.drawCount}（強制結束回合）`);
-      if (result.endTurn) endTurn('聚精會神強制結束');
+      setToast(`聚精：應抽 ${result.drawCount}（強制結束）`);
+      if (result.endTurn) endTurn('聚精會神強制結束', { force: true });
       return;
     }
 
-    // —— 磁力屏障（薄：只套自己；增幅寄出略過）——
     if (card.cardId === 'barrier') {
       if (amplifiedPending) {
-        pushLog('【磁力屏障】增幅寄出需其他單位目標 → 薄 demo 略過增幅，改套自己');
-        setAmplifiedPending(false);
+        pushLog('【磁力屏障】增幅寄出略過，改套自己');
+        patchActor(selected, { amplifiedPending: false });
       }
       const result = resolveBarrier({
         mageHex: unitHex,
-        mageId: 'self',
+        mageId: 'mage',
         amplified: false,
       });
       if (!result.ok) {
@@ -1294,49 +1465,52 @@ export function App() {
         return;
       }
       setBarrierAura(result.aura ?? null);
-      removeFromHand(card.instanceId);
-      spendActionIfCounted(card.cardId);
+      updateActor(selected, (a) => ({
+        ...a,
+        hand: a.hand.filter((c) => c.instanceId !== card.instanceId),
+        actionsLeft: counts ? Math.max(0, a.actionsLeft - 1) : a.actionsLeft,
+      }));
       pushLog(
-        `【磁力屏障】保護 ${result.aura?.targetActorId}` +
-          ` 鄰格 ${result.aura?.protectedHexes.length ?? 0}` +
-          ` 下回合擋屏障=${result.barrierBlockedNextTurn}` +
-          ` / events=${formatEvents(result.events)}`,
+        `【磁力屏障】鄰格 ${result.aura?.protectedHexes.length ?? 0}` +
+          ` 下回合擋=${result.barrierBlockedNextTurn}`,
       );
-      setToast('屏障：本輪保護自己鄰 1（光環 stub）');
+      setToast('屏障：本輪保護自己鄰 1');
       return;
     }
 
-    // —— 位面調換（兩單位 demo：自己 ↔ 隊友）——
     if (card.cardId === 'planar_swap') {
       const usedAmp = amplifiedPending;
       const result = resolvePlanarSwap({
         board,
         mageHex: unitHex,
-        actorA: { id: 'self', hex: unitHex },
-        actorB: { id: 'ally', hex: allyHex },
+        actorA: { id: selected, hex: unitHex },
+        actorB: { id: allyId, hex: allyHex },
         amplified: usedAmp,
       });
-      setAmplifiedPending(false);
       if (!result.ok) {
-        pushLog(`【位面調換】失敗：${result.reason}（若場上僅一單位則無法 demo）`);
+        pushLog(`【位面調換】失敗：${result.reason}`);
         setToast(`位面失敗：${result.reason}`);
+        patchActor(selected, { amplifiedPending: false });
         return;
       }
       const pos = result.positions;
-      if (pos?.self) setUnitHex(pos.self);
-      if (pos?.ally) setAllyHex(pos.ally);
-      removeFromHand(card.instanceId);
-      pushLog(
-        `【位面調換】自己↔隊友` +
-          (usedAmp ? '（增幅不受沉默）' : '') +
-          ` / events=${formatEvents(result.events)}`,
-      );
-      setToast('位面：已交換自己與隊友');
-      if (result.endTurn) endTurn('位面調換強制結束');
+      setActors((prev) => {
+        const next = { ...prev };
+        const a = { ...next[selected], amplifiedPending: false };
+        a.hand = a.hand.filter((c) => c.instanceId !== card.instanceId);
+        if (pos && pos[selected]) a.hex = pos[selected]!;
+        next[selected] = a;
+        const b = { ...next[allyId] };
+        if (pos && pos[allyId]) b.hex = pos[allyId]!;
+        next[allyId] = b;
+        return next;
+      });
+      pushLog(`【位面調換】${classLabel(selected)}↔${classLabel(allyId)}`);
+      setToast('位面：已交換');
+      if (result.endTurn) endTurn('位面調換強制結束', { force: true });
       return;
     }
 
-    // —— 騎士攻擊 ——
     if (card.cardId === 'attack') {
       let target: Axial | undefined;
       if (distance(attacker, BOSS_HEX) === 1) {
@@ -1349,9 +1523,7 @@ export function App() {
       }
       if (!target) {
         const msg = '需鄰王，或鄰格有可拆牆';
-        pushLog(
-          `【攻擊】失敗：${msg}（目前 (${attacker.q},${attacker.r}) 距王 ${distance(attacker, BOSS_HEX)}）`,
-        );
+        pushLog(`【攻擊】失敗：${msg}`);
         setToast(`攻擊失敗：${msg}`);
         return;
       }
@@ -1361,19 +1533,16 @@ export function App() {
         target,
       });
       if (result.board !== board) setBoard(result.board);
-      removeFromHand(card.instanceId);
-      spendActionIfCounted(card.cardId);
+      updateActor(selected, (a) => ({
+        ...a,
+        hand: a.hand.filter((c) => c.instanceId !== card.instanceId),
+        actionsLeft: counts ? Math.max(0, a.actionsLeft - 1) : a.actionsLeft,
+      }));
+      if (result.ok) noteBossDamage(result.bossDamage);
       const tgtDesc = equals(target, BOSS_HEX)
         ? '王'
         : `牆(${target.q},${target.r})`;
-      if (result.ok) noteBossDamage(result.bossDamage);
-      pushLog(
-        `【攻擊】→ ${tgtDesc}` +
-          ` bossDamage=${result.bossDamage}` +
-          ` ok=${result.ok}` +
-          (result.reason ? ` reason=${result.reason}` : '') +
-          ` / events=${formatEvents(result.events)}`,
-      );
+      pushLog(`【攻擊】→ ${tgtDesc} bossDamage=${result.bossDamage}`);
       setToast(
         result.ok
           ? `攻擊 ${tgtDesc}：王傷 ${result.bossDamage}`
@@ -1382,7 +1551,6 @@ export function App() {
       return;
     }
 
-    // —— 堅定信仰 ——
     if (card.cardId === 'faith') {
       const result = resolveFaith({
         hasMovedThisTurn,
@@ -1393,18 +1561,17 @@ export function App() {
         setToast(`信仰失敗：${result.reason}`);
         return;
       }
-      setCurseStacks(result.curseStacks);
-      removeFromHand(card.instanceId);
-      spendActionIfCounted(card.cardId);
-      pushLog(
-        `【堅定信仰】清 ${result.cleared} → 咒層 ${result.curseStacks}` +
-          ` / events=${formatEvents(result.events)}`,
-      );
-      setToast(`信仰：詛咒 ${curseStacks} → ${result.curseStacks}`);
+      updateActor(selected, (a) => ({
+        ...a,
+        curseStacks: result.curseStacks,
+        hand: a.hand.filter((c) => c.instanceId !== card.instanceId),
+        actionsLeft: counts ? Math.max(0, a.actionsLeft - 1) : a.actionsLeft,
+      }));
+      pushLog(`【堅定信仰】清 ${result.cleared} → 咒層 ${result.curseStacks}`);
+      setToast(`信仰：詛咒 → ${result.curseStacks}`);
       return;
     }
 
-    // —— 英勇衝鋒 ——
     if (card.cardId === 'heroic_charge') {
       setPendingPlay({ kind: 'heroic_charge', card });
       pushLog('【英勇衝鋒】請點軸向直線上的格以決定方向');
@@ -1412,19 +1579,17 @@ export function App() {
       return;
     }
 
-    // —— 奉獻 ——
     if (card.cardId === 'devotion') {
       if (distance(unitHex, allyHex) === 1) {
         completeDevotion(allyHex, card);
         return;
       }
       setPendingPlay({ kind: 'devotion', card });
-      pushLog(`【奉獻】隊友不鄰：請點隊友格 (${allyHex.q},${allyHex.r})（或先走近）`);
-      setToast('奉獻：點隊友格');
+      pushLog('【奉獻】請點友軍格');
+      setToast('奉獻：點友軍格');
       return;
     }
 
-    // —— 嘲諷 ——
     if (card.cardId === 'taunt') {
       const result = resolveTaunt({
         isOthersTurn,
@@ -1434,26 +1599,17 @@ export function App() {
           : null,
       });
       if (!result.ok) {
-        pushLog(
-          `【嘲諷】失敗：${result.reason}` +
-            '（可開「他人回合」開關再試）',
-        );
+        pushLog(`【嘲諷】失敗：${result.reason}（可開「他人回合」）`);
         setToast(`嘲諷失敗：${result.reason}`);
         return;
       }
       setTauntRestriction(result.bossPlaceRestriction ?? null);
       removeFromHand(card.instanceId);
-      pushLog(
-        `【嘲諷】中心 (${unitHex.q},${unitHex.r}) ring=1` +
-          ` priority=${result.tauntPriority}` +
-          ` overridesBarrier=${result.overridesBarrier}` +
-          ` / events=${formatEvents(result.events)}`,
-      );
-      setToast('嘲諷：王不可在鄰 1 鋪牆（限制 stub）');
+      pushLog(`【嘲諷】中心 (${unitHex.q},${unitHex.r})`);
+      setToast('嘲諷：王不可在鄰 1 鋪牆');
       return;
     }
 
-    // —— 不死存在 ——
     if (card.cardId === 'undying') {
       setPendingPlay({ kind: 'undying', card });
       pushLog(
@@ -1463,69 +1619,85 @@ export function App() {
       return;
     }
 
-    const msg = '此薄 UI 尚未串結算';
-    setToast(`「${card.name}」：${msg}`);
-    pushLog(`【${card.name}】${msg}`);
+    setToast(`「${card.name}」：此薄 UI 尚未串結算`);
+    pushLog(`【${card.name}】尚未串結算`);
   }
 
   return (
     <div className="app">
       <header>
-        <h1>薄 UI（可玩回合 loop）</h1>
+        <h1>薄 UI（三職業平衡試玩）</h1>
         <p className="muted">
-          射擊傷王 →「結束回合」→ 王鋪牆 → 再結束看老化。懸停路徑／甜區仍可用。
+          三人同場；傷王即鋪牆；全員結束回合才進下一輪。重製可選出生點。
         </p>
       </header>
 
-      <BoardCanvas
-        board={board}
-        unitHex={unitHex}
-        allyHex={allyHex}
-        hoverPath={hoverPath}
-        onHexClick={onHexClick}
-        onHexHover={setHoverHex}
-        showSweetZone={showSweetZone}
-      />
+      <div className="play-row">
+        <BoardCanvas
+          board={board}
+          actors={
+            phase === 'spawn-pick'
+              ? CLASS_ORDER.filter((id) => spawnHexes[id]).map((id) => ({
+                  id,
+                  label: pieceLabel(id),
+                  hex: spawnHexes[id]!,
+                  fill: COLOR_SEL.fill,
+                  stroke: COLOR_SEL.stroke,
+                }))
+              : boardActors
+          }
+          selectedHex={phase === 'playing' ? unitHex : undefined}
+          hoverPath={hoverPath}
+          onHexClick={onHexClick}
+          onHexHover={setHoverHex}
+          showSweetZone={showSweetZone && phase === 'playing'}
+          onReset={beginSpawnPick}
+          spawnHint={spawnHint}
+        />
 
-      <div>
+        <section className="log-panel" aria-label="事件日誌">
+          <h2>事件日誌</h2>
+          <ul className="log">
+            {log.length === 0 ? (
+              <li className="empty">尚無紀錄</li>
+            ) : (
+              log.map((line, i) => (
+                <li key={`${i}-${line.slice(0, 24)}`}>{line}</li>
+              ))
+            )}
+          </ul>
+        </section>
+      </div>
+
+      <div className="turn-row">
         <span className="tab">
-          {demoLabel(demo)}
+          {classLabel(selected)}
           {' · '}王HP {bossHp}/{BOSS_HP_DEMO}
-          {' · '}輪 {roundDisplay}
-          {' · '}行動者 {actorNow ?? '—'}
-          {' · '}上次抽 {lastDraw || '—'}
+          {' · '}輪 {roundIndex}
           {won ? ' · 勝利' : ''}
           {' · '}移動 {movesLeft}/{TURN_MOVES_PER_ROUND}
           {' · '}行動 {actionsLeft}/{TURN_ACTIONS_PER_ROUND}
           {moveLocked ? ' · 移動鎖定' : ''}
           {hasMovedThisTurn ? ' · 已移動' : ''}
+          {me.endedThisRound ? ' · 本輪已結束' : ''}
           {mayPlayShotIgnoreRange ? ' · 大招可射' : ''}
-          {' · '}單位 ({unitHex.q},{unitHex.r})
-          {demo === 'gunner' ? ` · ${ammoHint}` : ''}
-          {demo === 'mage' && amplifiedPending ? ' · 增幅待用' : ''}
-          {demo === 'mage' && barrierAura ? ' · 屏障中' : ''}
-          {demo === 'knight'
-            ? ` · 咒${curseStacks}/友${allyCurseStacks}`
-            : ''}
+          {' · '}({unitHex.q},{unitHex.r})
+          {selected === 'gunner' ? ` · ${ammoHint}` : ''}
+          {selected === 'mage' && amplifiedPending ? ' · 增幅待用' : ''}
+          {selected === 'mage' && barrierAura ? ' · 屏障中' : ''}
+          {selected === 'knight' ? ` · 咒${curseStacks}` : ''}
           {tauntRestriction ? ' · 嘲諷中' : ''}
           {pendingPlay ? ` · 指定:${pendingPlay.kind}` : ''}
-        </span>{' '}
-        <button type="button" onClick={() => switchDemo('gunner')}>
-          槍手
-        </button>{' '}
-        <button type="button" onClick={() => switchDemo('mage')}>
-          法師
-        </button>{' '}
-        <button type="button" onClick={() => switchDemo('knight')}>
-          騎士
-        </button>{' '}
+          {lastDraw ? ` · 上次抽 ${lastDraw}` : ''}
+        </span>
         <button
           type="button"
+          className="end-turn"
           onClick={() => endTurn('玩家結束')}
-          disabled={won || actorNow !== ACTOR_PLAYER}
+          disabled={won || phase !== 'playing' || me.endedThisRound}
         >
           結束回合
-        </button>{' '}
+        </button>
         {pendingPlay ? (
           <button
             type="button"
@@ -1542,7 +1714,7 @@ export function App() {
         </p>
       ) : null}
 
-      {demo === 'knight' ? (
+      {selected === 'knight' ? (
         <div className="demo-toggles">
           <label>
             <input
@@ -1567,46 +1739,42 @@ export function App() {
               onChange={(e) => setAtRoundEndAfterActors(e.target.checked)}
             />{' '}
             輪末可行動者皆結束（不死）
-          </label>{' '}
-          <button
-            type="button"
-            onClick={() => {
-              setCurseStacks((n) => n + 1);
-              pushLog('【demo】自己詛咒 +1');
-            }}
-          >
-            自己+咒
-          </button>{' '}
-          <button
-            type="button"
-            onClick={() => {
-              setAllyCurseStacks((n) => n + 1);
-              pushLog('【demo】隊友詛咒 +1');
-            }}
-          >
-            隊友+咒
-          </button>
+          </label>
         </div>
       ) : null}
 
-      <Hand cards={hand} onPlay={onPlay} onCardHover={setHoveredCard} />
+      <div className="hand-row">
+        <div className="class-picks" role="group" aria-label="職業">
+          {CLASS_ORDER.map((id) => (
+            <button
+              key={id}
+              type="button"
+              className={
+                'card-btn' +
+                (id === selected ? ' selected' : '') +
+                (actors[id].endedThisRound ? ' ended' : '')
+              }
+              onClick={() => selectClass(id)}
+              disabled={phase !== 'playing'}
+            >
+              <span className="name">{classLabel(id)}</span>
+              <span className="meta">
+                ({actors[id].hex.q},{actors[id].hex.r})
+                {actors[id].endedThisRound ? ' · 已結束' : ' · 可行動'}
+              </span>
+            </button>
+          ))}
+        </div>
+        <Hand
+          cards={hand}
+          onPlay={onPlay}
+          onCardHover={setHoveredCard}
+        />
+      </div>
 
       <div className="toast" role="status">
         {toast}
       </div>
-
-      <section className="log-panel" aria-label="事件日誌">
-        <h2>事件日誌</h2>
-        <ul className="log">
-          {log.length === 0 ? (
-            <li className="empty">尚無紀錄</li>
-          ) : (
-            log.map((line, i) => (
-              <li key={`${i}-${line.slice(0, 24)}`}>{line}</li>
-            ))
-          )}
-        </ul>
-      </section>
     </div>
   );
 }

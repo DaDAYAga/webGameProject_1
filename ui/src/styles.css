@@ -20,12 +20,43 @@ body {
 }
 
 .app {
-  max-width: 920px;
+  max-width: 1180px;
   margin: 0 auto;
   padding: 1.25rem 1rem 2rem;
   display: flex;
   flex-direction: column;
   gap: 1rem;
+}
+
+/* 棋盤＋日誌並排：日誌高度跟隨棋盤面板，內部捲動 */
+.play-row {
+  display: flex;
+  align-items: stretch;
+  gap: 0.85rem;
+  min-height: 0;
+}
+
+.play-row .board-panel {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.play-row .log-panel {
+  flex: 0 0 320px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  max-height: none;
+  align-self: stretch;
+}
+
+.play-row .log {
+  flex: 1 1 auto;
+  max-height: none;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 header h1 {
@@ -48,10 +79,39 @@ header h1 {
   font-size: 0.85rem;
 }
 
+/* 職業鈕與手牌同一列 */
+.hand-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: flex-start;
+}
+
+.class-picks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  flex: 0 0 auto;
+}
+
+.class-picks .card-btn {
+  min-width: 7.5rem;
+}
+
+.class-picks .card-btn.selected {
+  border-color: #5ad67a;
+  box-shadow: 0 0 0 1px #3d8a5a inset;
+}
+
+.class-picks .card-btn.ended {
+  opacity: 0.55;
+}
+
 .hand {
   display: flex;
   flex-wrap: wrap;
   gap: 0.6rem;
+  flex: 1 1 auto;
 }
 
 .card-btn {
@@ -59,11 +119,12 @@ header h1 {
   padding: 0.75rem 0.85rem;
   border: 1px solid #3d4658;
   border-radius: 10px;
-  background: linear-gradient(180deg, #232936, #1a1f2a);
+  background: linear-gradient(180deg, #2a3140, #1a1f2a);
   color: inherit;
   cursor: pointer;
   text-align: left;
-  transition: border-color 0.12s, transform 0.08s;
+  transition: border-color 0.12s, transform 0.08s, box-shadow 0.12s;
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.35);
 }
 
 .card-btn:hover {
@@ -77,14 +138,40 @@ header h1 {
 
 .card-btn .name {
   display: block;
-  font-weight: 600;
-  margin-bottom: 0.2rem;
+  font-weight: 650;
+  margin-bottom: 0.15rem;
+  letter-spacing: 0.01em;
 }
 
 .card-btn .meta {
   display: block;
-  font-size: 0.75rem;
+  font-size: 0.72rem;
   color: #9aa3b2;
+}
+
+.card-btn .side {
+  display: block;
+  margin-top: 0.25rem;
+  font-size: 0.72rem;
+  color: #c9b48a;
+}
+
+.turn-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  align-items: center;
+}
+
+.turn-row .end-turn {
+  min-width: 7.5rem;
+  padding: 0.55rem 0.85rem;
+  border-radius: 10px;
+  border: 1px solid #5a4a3a;
+  background: #2c2430;
+  color: #f0c9a0;
+  cursor: pointer;
+  font-weight: 600;
 }
 
 .toast {
@@ -113,6 +200,7 @@ header h1 {
   font-size: 0.95rem;
   background: #1e2430;
   border-bottom: 1px solid #2e3648;
+  flex: 0 0 auto;
 }
 
 .log {
@@ -140,13 +228,13 @@ header h1 {
   color: #6b7385;
 }
 
-
 .board-panel {
   border: 1px solid #2e3648;
   border-radius: 10px;
   background: #171b24;
   overflow: hidden;
-  padding-bottom: 0.75rem;
+  padding-bottom: 0;
+  position: relative;
 }
 
 .board-panel h2 {
@@ -162,6 +250,15 @@ header h1 {
   font-size: 0.82rem;
 }
 
+.spawn-hint {
+  margin: 0 0.75rem 0.35rem;
+  padding: 0.35rem 0.55rem;
+  border-radius: 6px;
+  background: #2a3140;
+  color: #f0c9a0;
+  font-size: 0.85rem;
+}
+
 .board-canvas {
   display: block;
   margin: 0 auto;
@@ -169,6 +266,28 @@ header h1 {
   height: auto;
   cursor: crosshair;
   background: #12141a;
+}
+
+.board-footer {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0.45rem 0.65rem 0.55rem;
+  border-top: 1px solid #2e3648;
+  background: #171b24;
+}
+
+.board-reset {
+  padding: 0.4rem 0.75rem;
+  border-radius: 8px;
+  border: 1px solid #3d4658;
+  background: #232936;
+  color: #c9d4ea;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+.board-reset:hover {
+  border-color: #6b8cff;
 }
 
 .demo-toggles {
