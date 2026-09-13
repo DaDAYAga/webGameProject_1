@@ -353,3 +353,30 @@
 - 其他遠程牌（若日後新增）是否一併預覽
 - 常駐甜區開關（非懸停）
 
+---
+
+## 2026-09-13m — 薄 UI 可玩回合 loop（core/turn）（鎖定）
+
+> 來源：人類任務「playable turn loop via core/turn」。**UI glue**；不改 core 規則實作。
+
+### 定案
+
+1. **王 HP demo**＝12；既有回報 `bossDamage` 的牌（射擊／魔法箭／Power UP／攻擊／英勇衝鋒等）扣 HP；`HP≤0` → 勝利 toast／日誌並停玩。
+2. **結束回合**接 `createMatch`／`applyCommand`；行動序 `player` → `boss`；`punishEnabled: true`。
+3. **玩家結束**：本回合有有效王傷 → `MARK_BOSS_DAMAGED`，再 `END_ACTOR_TURN`。
+4. **DrawStub**（玩家回合開始）：槍手＋`shot`、法師＋`magic_arrow`、騎士＋`attack`；日誌 DrawStub。無完整牌庫。
+5. **輪末**：以結束前 snapshot 呼叫 `advanceWallAging(aging, wallsPlaced, { board })`，把 newlyAged 寫回 `tile.aged`。僅本局王鋪且 `REGISTER_WALL_PLACED` 的牆進老化；開場／demo 預老化牆不進。
+6. **王回合 v0**（scripted）：空位鋪 1 未老化 `plain`＋`REGISTER_WALL_PLACED`（優先 ring-2／鄰接地形）；若本輪零王傷再鋪 1 `punish`（無空則 skip 日誌）。結束後回到玩家：移動 2／行動 1／清 moveLocked；**保留裝填**。
+7. **UI**：顯示王 HP、輪、行動者、上次抽；老化牆既有變色／標籤。
+
+### 給 bot（禁改）
+
+- 不要做完整牌庫／真實 AI／包圍勝負
+- 不要讓開場／demo 預老化牆進入 aging registry
+- 不要在勝利後繼續出牌／結束回合
+
+### 未定
+
+- 可走範圍常駐高亮
+- 與 `STUB_MOVE` 移動點對接
+

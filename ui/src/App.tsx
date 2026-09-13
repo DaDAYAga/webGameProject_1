@@ -1,11 +1,8 @@
 /**
- * 學習筆記（移動／佔格／懸停路徑／甜區預覽）：
- * 1) occupied：盟友格不進 Board.tiles；走路用 shortestPath(..., { occupied:[ally] })，自身不擋自己。
- * 2) hoverPath：與 tryMoveTo 同一套路徑／步數上限；有 pendingPlay 時不顯示走路預覽。
- * 3) pendingPlay：出牌指定模式點格完成牌目標（不走移動）；取消鈕可清。
- * 4) moveLocked 仍擋「開始出牌」；大亂流／英勇衝鋒須走完或未鎖時再出。
- * 5) UI 不算規則：路徑／推動／衝鋒／裝填皆由 core 回傳，這裡只同步 state。
- * 6) hoveredCard：Hand onCardHover 僅預覽；shot／magic_arrow → showSweetZone（不啟動 pending／移動）。
+ * 學習筆記（可玩回合 loop／core/turn）：
+ * 1) createMatch({ actorOrder:["player","boss"], punishEnabled })＋applyCommand：結束回合／老化 registry／PunishPlace 意圖。
+ * 2) 玩家結束：若本回合有效傷王 → MARK_BOSS_DAMAGED，再 END_ACTOR_TURN；王回合 v0 鋪 plain（REGISTER_WALL_PLACED）／可選 punish。
+ * 3) 輪末用 advanceWallAging(aging, wallsPlaced, { board }) 把 newlyAged 寫回 tile.aged（開場／demo 預老化牆不進管線）。
  */
 import { useMemo, useState } from 'react';
 import {
@@ -56,9 +53,22 @@ import {
   getTile,
   hexKey,
   kindAllowsCrack,
+  placeTerrain,
   shortestPath,
   type Board,
 } from '@core/board/index.js';
+import {
+  DEFAULT_MAP_RADIUS,
+  listMapHexes,
+} from '@core/enclosure/index.js';
+import {
+  advanceWallAging,
+  applyCommand,
+  createMatch,
+  currentActorId,
+  type MatchEvent,
+  type MatchState,
+} from '@core/turn/index.js';
 import {
   AXIAL_DIRECTIONS,
   add,
@@ -80,6 +90,70 @@ const START_ALLY_HEX: Axial = { q: 3, r: -1 };
 
 const TURN_MOVES_PER_ROUND = 2;
 const TURN_ACTIONS_PER_ROUND = 1;
+/** Demo 王 HP（薄 UI 常數，非正式數值）。 */
+const BOSS_HP_DEMO = 12;
+const ACTOR_PLAYER = 'player';
+const ACTOR_BOSS = 'boss';
+
+function bootMatch(): { state: MatchState; events: MatchEvent[] } {
+  return createMatch({
+    actorOrder: [ACTOR_PLAYER, ACTOR_BOSS],
+    punishEnabled: true,
+  });
+}
+
+/** 抽牌 stub：槍手 shot／法師 magic_arrow／騎士 attack。 */
+function makeDrawStubCard(demo: DemoClass, seq: number): HandCard {
+  const cardId =
+    demo === 'gunner' ? 'shot' : demo === 'mage' ? 'magic_arrow' : 'attack';
+  const name =
+    demo === 'gunner'
+      ? GUNNER_CARD_DEFS.shot.name
+      : demo === 'mage'
+        ? MAGE_CARD_DEFS.magic_arrow.name
+        : KNIGHT_CARD_DEFS.attack.name;
+  return {
+    instanceId: `draw-${demo}-${seq}-${cardId}`,
+    cardId,
+    name,
+    wired: WIRED_IDS.has(cardId),
+  };
+}
+
+/**
+ * 王鋪牆空位：圖內、非王／單位／隊友、無地形。
+ * 優先 ring-2，其次鄰接既有地形，再任意空格。
+ */
+function pickBossPlaceHex(
+  board: Board,
+  unitHex: Axial,
+  allyHex: Axial,
+  exclude: Axial | null,
+): Axial | null {
+  const blocked = (h: Axial): boolean => {
+    if (equals(h, BOSS_HEX) || equals(h, unitHex) || equals(h, allyHex)) {
+      return true;
+    }
+    if (exclude && equals(h, exclude)) return true;
+    return getTile(board, h) !== undefined;
+  };
+  const all = listMapHexes({ radius: DEFAULT_MAP_RADIUS }).filter(
+    (h) => !blocked(h),
+  );
+  if (all.length === 0) return null;
+  const ring2 = all.filter((h) => distance(h, BOSS_HEX) === 2);
+  if (ring2.length > 0) return ring2[0]!;
+  const adjTerrain = all.filter((h) =>
+    neighbors(h).some((n) => getTile(board, n) !== undefined),
+  );
+  if (adjTerrain.length > 0) return adjTerrain[0]!;
+  return all[0]!;
+}
+
+function summarizeMatchEvents(events: readonly MatchEvent[]): string {
+  if (events.length === 0) return '';
+  return events.map((e) => e.type).join(', ');
+}
 
 /** 已串結算的牌種（薄 demo）。 */
 const WIRED_IDS = new Set([
@@ -291,23 +365,54 @@ function pendingHint(p: PendingPlay | null): string {
   return '';
 }
 
+const INITIAL_SESSION = (() => {
+  const boot = bootMatch();
+  let hand = buildGunnerHand();
+  let drawSeq = 0;
+  let lastDraw = '';
+  const logs = [
+    '薄 UI：結束回合接 core/turn；王 HP 12；射擊→結束→看王牆→再結束→老化。',
+  ];
+  for (const e of boot.events) {
+    if (e.type === 'DrawStub' && e.actorId === ACTOR_PLAYER) {
+      const card = makeDrawStubCard('gunner', drawSeq);
+      hand = [...hand, card];
+      lastDraw = card.name;
+      drawSeq += 1;
+      logs.push(`【DrawStub】開局入手 ${card.name}`);
+    } else if (e.type === 'RoundStarted') {
+      logs.push(`【match】RoundStarted round=${e.roundIndex}`);
+    } else if (e.type === 'TurnStarted') {
+      logs.push(`【match】TurnStarted ${e.actorId}`);
+    }
+  }
+  return { match: boot.state, hand, lastDraw, drawSeq, logs };
+})();
+
 export function App() {
+
   const [demo, setDemo] = useState<DemoClass>('gunner');
   const [unitHex, setUnitHex] = useState<Axial>(START_UNIT_HEX);
   const [allyHex, setAllyHex] = useState<Axial>(START_ALLY_HEX);
-  const [hand, setHand] = useState<HandCard[]>(() => buildGunnerHand());
+  const [hand, setHand] = useState<HandCard[]>(() => INITIAL_SESSION.hand);
   const [ammo, setAmmo] = useState<AmmoSlotState>(EMPTY_AMMO_SLOT);
   const [amplifiedPending, setAmplifiedPending] = useState(false);
   const [board, setBoard] = useState<Board>(() => createDemoBoard());
-  const [log, setLog] = useState<string[]>([
-    '薄 UI：剩餘職業牌已串；指定模式點格完成目標（非移動）。移動鎖仍擋開始出牌。',
-  ]);
+  const [match, setMatch] = useState<MatchState>(() => INITIAL_SESSION.match);
+  const [bossHp, setBossHp] = useState(BOSS_HP_DEMO);
+  const [won, setWon] = useState(false);
+  const [lastDraw, setLastDraw] = useState(() => INITIAL_SESSION.lastDraw);
+  const [drawSeq, setDrawSeq] = useState(() => INITIAL_SESSION.drawSeq);
+  /** 本玩家回合是否已造成有效王傷（結束時 MARK_BOSS_DAMAGED）。 */
+  const [dealtBossDamageThisTurn, setDealtBossDamageThisTurn] = useState(false);
+  const [log, setLog] = useState<string[]>(() => INITIAL_SESSION.logs);
   const [toast, setToast] = useState('');
-  const [round, setRound] = useState(1);
   const [movesLeft, setMovesLeft] = useState(TURN_MOVES_PER_ROUND);
   const [actionsLeft, setActionsLeft] = useState(TURN_ACTIONS_PER_ROUND);
   const [moveLocked, setMoveLocked] = useState(false);
   const mustFinishMove = moveLocked;
+  const actorNow = currentActorId(match);
+  const roundDisplay = match.roundIndex;
   /** 本回合是否已移動（走路／大亂流／衝鋒）；信仰／大招用。 */
   const [hasMovedThisTurn, setHasMovedThisTurn] = useState(false);
   /** 大招授旗：下一張手上射擊 ignoreRange 且不另扣行動。 */
@@ -365,9 +470,134 @@ export function App() {
     }
   }
 
+  /** 扣王 HP；≤0 勝利並停玩。 */
+  function noteBossDamage(amount: number) {
+    if (amount <= 0 || won) return;
+    setDealtBossDamageThisTurn(true);
+    setBossHp((hp) => {
+      const next = Math.max(0, hp - amount);
+      if (next <= 0) {
+        setWon(true);
+        setToast('勝利：王 HP ≤ 0');
+        setLog((prev) => [...prev, '【勝利】王 HP ≤ 0，停止繼續操作']);
+      }
+      return next;
+    });
+  }
+
+  /** 玩家回合開始：重設移動／行動／鎖（保留裝填）。 */
+  function resetPlayerTurnUi() {
+    setMovesLeft(TURN_MOVES_PER_ROUND);
+    setActionsLeft(TURN_ACTIONS_PER_ROUND);
+    setMoveLocked(false);
+    setHasMovedThisTurn(false);
+    setAmplifiedPending(false);
+    setMayPlayShotIgnoreRange(false);
+    setPendingPlay(null);
+    setBarrierAura(null);
+    setTauntRestriction(null);
+    setAtRoundEndAfterActors(false);
+    setDealtBossDamageThisTurn(false);
+  }
+
+  /**
+   * 王回合 v0：鋪 1 未老化 plain＋REGISTER；零傷再鋪 punish；結束回合。
+   * 回傳更新後 match／board／事件（含可能的 RoundEnded／WallAged）。
+   */
+  function runBossTurnV0(
+    stateIn: MatchState,
+    boardIn: Board,
+    unit: Axial,
+    ally: Axial,
+  ): {
+    state: MatchState;
+    board: Board;
+    events: MatchEvent[];
+    logs: string[];
+    agingSnapshot: {
+      aging: ReadonlyMap<string, number>;
+      walls: readonly string[];
+      board: Board;
+    } | null;
+  } {
+    let state = stateIn;
+    let liveBoard = boardIn;
+    const events: MatchEvent[] = [];
+    const logs: string[] = [];
+
+    const plainHex = pickBossPlaceHex(liveBoard, unit, ally, null);
+    if (plainHex) {
+      liveBoard = placeTerrain(liveBoard, plainHex, 'plain');
+      const key = hexKey(plainHex);
+      const reg = applyCommand(state, {
+        type: 'REGISTER_WALL_PLACED',
+        hexKey: key,
+      });
+      state = reg.state;
+      events.push(...reg.events);
+      logs.push(
+        `【王】placeTerrain plain@(${plainHex.q},${plainHex.r}) + REGISTER_WALL_PLACED`,
+      );
+    } else {
+      logs.push('【王】無空位可鋪 plain（skip）');
+    }
+
+    if (!state.bossDamagedThisRound) {
+      const punishHex = pickBossPlaceHex(liveBoard, unit, ally, plainHex);
+      if (punishHex) {
+        liveBoard = placeTerrain(liveBoard, punishHex, 'punish');
+        logs.push(
+          `【王】PunishPlace／零傷 → punish@(${punishHex.q},${punishHex.r})`,
+        );
+      } else {
+        logs.push('【王】懲罰跳過：無空位');
+      }
+    } else {
+      logs.push('【王】本輪已傷王，不鋪 punish');
+    }
+
+    // 輪末老化前快照（finishRound 會推進 registry，需另帶 board 寫 aged）
+    const agingSnapshot = {
+      aging: state.aging,
+      walls: state.wallsPlacedThisRound,
+      board: liveBoard,
+    };
+
+    const ended = applyCommand(state, {
+      type: 'END_ACTOR_TURN',
+      actorId: ACTOR_BOSS,
+    });
+    state = ended.state;
+    events.push(...ended.events);
+    logs.push(
+      `【王】結束回合 → events=${summarizeMatchEvents(ended.events)}`,
+    );
+
+    return { state, board: liveBoard, events, logs, agingSnapshot };
+  }
+
   function switchDemo(next: DemoClass) {
+    const boot = bootMatch();
     setDemo(next);
-    setHand(buildHand(next));
+    let nextHand = buildHand(next);
+    let seq = 0;
+    let drawName = '';
+    for (const e of boot.events) {
+      if (e.type === 'DrawStub' && e.actorId === ACTOR_PLAYER) {
+        const card = makeDrawStubCard(next, seq);
+        nextHand = [...nextHand, card];
+        drawName = card.name;
+        seq += 1;
+      }
+    }
+    setHand(nextHand);
+    setMatch(boot.state);
+    setBoard(createDemoBoard());
+    setBossHp(BOSS_HP_DEMO);
+    setWon(false);
+    setLastDraw(drawName);
+    setDrawSeq(seq);
+    setDealtBossDamageThisTurn(false);
     setAmmo(EMPTY_AMMO_SLOT);
     setAmplifiedPending(false);
     setMovesLeft(TURN_MOVES_PER_ROUND);
@@ -384,30 +614,104 @@ export function App() {
     setIsOthersTurn(false);
     setIsDead(false);
     setAtRoundEndAfterActors(false);
+    setUnitHex(START_UNIT_HEX);
     setAllyHex(START_ALLY_HEX);
-    pushLog(`【切換】→ ${demoLabel(next)}（手牌重建；額度／鎖／指定清除）`);
+    pushLog(
+      `【切換】→ ${demoLabel(next)}（重建 match／手牌；DrawStub=${drawName || '無'}）`,
+    );
     setToast(`切換 ${demoLabel(next)}`);
   }
 
   function endTurn(reason = '玩家結束') {
-    const nextRound = round + 1;
-    setRound(nextRound);
-    setMovesLeft(TURN_MOVES_PER_ROUND);
-    setActionsLeft(TURN_ACTIONS_PER_ROUND);
-    setMoveLocked(false);
-    setHasMovedThisTurn(false);
-    setAmplifiedPending(false);
-    setMayPlayShotIgnoreRange(false);
-    setPendingPlay(null);
-    setBarrierAura(null);
-    setTauntRestriction(null);
-    setAtRoundEndAfterActors(false);
-    pushLog(
-      `【結束回合】${reason} → round ${nextRound}` +
-        `（移動 ${TURN_MOVES_PER_ROUND}／行動 ${TURN_ACTIONS_PER_ROUND}；鎖／增幅／大招旗／屏障光環清除）`,
+    if (won) {
+      pushLog('【結束回合】已勝利，停止操作');
+      setToast('已勝利');
+      return;
+    }
+    if (currentActorId(match) !== ACTOR_PLAYER) {
+      pushLog(`【結束回合】拒絕：目前行動者=${currentActorId(match)}`);
+      setToast('非玩家回合');
+      return;
+    }
+
+    let state = match;
+    let liveBoard = board;
+    const allEvents: MatchEvent[] = [];
+    const extraLogs: string[] = [];
+
+    if (dealtBossDamageThisTurn) {
+      const marked = applyCommand(state, { type: 'MARK_BOSS_DAMAGED' });
+      state = marked.state;
+      allEvents.push(...marked.events);
+      extraLogs.push('【結束回合】MARK_BOSS_DAMAGED');
+    }
+
+    const playerEnd = applyCommand(state, {
+      type: 'END_ACTOR_TURN',
+      actorId: ACTOR_PLAYER,
+    });
+    state = playerEnd.state;
+    allEvents.push(...playerEnd.events);
+    extraLogs.push(
+      `【結束回合】${reason} → ${summarizeMatchEvents(playerEnd.events)}`,
     );
+
+    // 王回合自動（scripted v0）
+    if (currentActorId(state) === ACTOR_BOSS) {
+      const boss = runBossTurnV0(state, liveBoard, unitHex, allyHex);
+      state = boss.state;
+      liveBoard = boss.board;
+      allEvents.push(...boss.events);
+      extraLogs.push(...boss.logs);
+
+      const roundEnded = boss.events.some((e) => e.type === 'RoundEnded');
+      if (roundEnded && boss.agingSnapshot) {
+        const aged = advanceWallAging(
+          boss.agingSnapshot.aging,
+          boss.agingSnapshot.walls,
+          { board: boss.agingSnapshot.board },
+        );
+        if (aged.board) liveBoard = aged.board;
+        if (aged.newlyAgedKeys.length > 0) {
+          extraLogs.push(
+            `【老化】advanceWallAging → aged=[${aged.newlyAgedKeys.join(',')}]`,
+          );
+        }
+      }
+    }
+
+    setMatch(state);
+    setBoard(liveBoard);
+
+    // 處理抽牌／玩家回合開始
+    let seq = drawSeq;
+    let drew = '';
+    for (const e of allEvents) {
+      if (e.type === 'DrawStub' && e.actorId === ACTOR_PLAYER) {
+        const card = makeDrawStubCard(demo, seq);
+        setHand((prev) => [...prev, card]);
+        drew = card.name;
+        seq += 1;
+      }
+      if (e.type === 'TurnStarted' && e.actorId === ACTOR_PLAYER) {
+        resetPlayerTurnUi();
+      }
+      if (e.type === 'PunishPlace') {
+        extraLogs.push('【事件】PunishPlace（零傷意圖；王回合已處理）');
+      }
+      if (e.type === 'WallAged') {
+        extraLogs.push(`【事件】WallAged ${e.hexKey}`);
+      }
+    }
+    if (drew) {
+      setLastDraw(drew);
+      setDrawSeq(seq);
+      extraLogs.push(`【DrawStub】入手 ${drew}`);
+    }
+
+    for (const line of extraLogs) pushLog(line);
     setToast(
-      `第 ${nextRound} 回合：移動 ${TURN_MOVES_PER_ROUND} · 行動 ${TURN_ACTIONS_PER_ROUND}`,
+      `輪 ${state.roundIndex} · 行動者 ${currentActorId(state) ?? '—'}（裝填保留）`,
     );
   }
 
@@ -423,6 +727,14 @@ export function App() {
 
   /** 走路移動（無 pending 時）。 */
   function tryMoveTo(hex: Axial) {
+    if (won) {
+      setToast('已勝利，停止操作');
+      return;
+    }
+    if (currentActorId(match) !== ACTOR_PLAYER) {
+      setToast('非玩家回合');
+      return;
+    }
     const tileDesc = describeHex(board, hex);
     const base = `【點格】axial=(${hex.q},${hex.r}) key=${hexKey(hex)} → ${tileDesc}`;
 
@@ -631,6 +943,7 @@ export function App() {
     removeFromHand(card.instanceId);
     spendActionIfCounted('heroic_charge');
     setPendingPlay(null);
+    noteBossDamage(final.bossDamage);
     pushLog(
       `【英勇衝鋒】→ (${final.actorPosition.q},${final.actorPosition.r})` +
         ` bossDamage=${final.bossDamage} hitBoss=${final.hitBoss}` +
@@ -736,6 +1049,17 @@ export function App() {
     const bonusShot =
       card.cardId === 'shot' && mayPlayShotIgnoreRange === true;
 
+    if (won) {
+      pushLog(`【${card.name}】已勝利，停止出牌`);
+      setToast('已勝利');
+      return;
+    }
+    if (currentActorId(match) !== ACTOR_PLAYER) {
+      pushLog(`【${card.name}】非玩家回合（${currentActorId(match)}）`);
+      setToast('非玩家回合');
+      return;
+    }
+
     if (pendingPlay) {
       pushLog(`【${card.name}】請先完成或取消目前指定（${pendingPlay.kind}）`);
       setToast('請先完成／取消指定');
@@ -778,6 +1102,7 @@ export function App() {
         (bonusShot ? ' / 大招 ignoreRange' : '') +
         ` / drawFromAmmo=${result.drawFromAmmo}` +
         ` / events=${formatEvents(result.events)}`;
+      noteBossDamage(result.bossDamage);
       pushLog(line);
       setToast(
         `射擊：王傷 ${result.bossDamage}` +
@@ -849,6 +1174,7 @@ export function App() {
       if (result.ammo) setAmmo(result.ammo);
       removeFromHand(card.instanceId);
       spendActionIfCounted(card.cardId);
+      noteBossDamage(result.bossDamage ?? 0);
       pushLog(
         `【Power UP!!】temp_shot → bossDamage=${result.bossDamage}` +
           ` 甜區=${result.inSweetZone ? '是' : '否'}` +
@@ -911,6 +1237,7 @@ export function App() {
       setAmplifiedPending(false);
       removeFromHand(card.instanceId);
       spendActionIfCounted(card.cardId);
+      noteBossDamage(result.bossDamage);
       pushLog(
         `【魔法箭】attacker=(${attacker.q},${attacker.r}) → ` +
           `bossDamage=${result.bossDamage}` +
@@ -1039,6 +1366,7 @@ export function App() {
       const tgtDesc = equals(target, BOSS_HEX)
         ? '王'
         : `牆(${target.q},${target.r})`;
+      if (result.ok) noteBossDamage(result.bossDamage);
       pushLog(
         `【攻擊】→ ${tgtDesc}` +
           ` bossDamage=${result.bossDamage}` +
@@ -1143,10 +1471,9 @@ export function App() {
   return (
     <div className="app">
       <header>
-        <h1>薄 UI（棋盤移動 + 手牌 demo）</h1>
+        <h1>薄 UI（可玩回合 loop）</h1>
         <p className="muted">
-          懸停格＝走路路徑（螢光綠）；懸停「射擊／魔法箭」＝遠程甜區（琥珀）。
-          有 pending 時點格＝牌目標（不預覽移動）。隊友擋路；demo 有測試地形。
+          射擊傷王 →「結束回合」→ 王鋪牆 → 再結束看老化。懸停路徑／甜區仍可用。
         </p>
       </header>
 
@@ -1163,7 +1490,11 @@ export function App() {
       <div>
         <span className="tab">
           {demoLabel(demo)}
-          {' · '}round {round}
+          {' · '}王HP {bossHp}/{BOSS_HP_DEMO}
+          {' · '}輪 {roundDisplay}
+          {' · '}行動者 {actorNow ?? '—'}
+          {' · '}上次抽 {lastDraw || '—'}
+          {won ? ' · 勝利' : ''}
           {' · '}移動 {movesLeft}/{TURN_MOVES_PER_ROUND}
           {' · '}行動 {actionsLeft}/{TURN_ACTIONS_PER_ROUND}
           {moveLocked ? ' · 移動鎖定' : ''}
@@ -1188,7 +1519,11 @@ export function App() {
         <button type="button" onClick={() => switchDemo('knight')}>
           騎士
         </button>{' '}
-        <button type="button" onClick={() => endTurn('玩家結束')}>
+        <button
+          type="button"
+          onClick={() => endTurn('玩家結束')}
+          disabled={won || actorNow !== ACTOR_PLAYER}
+        >
           結束回合
         </button>{' '}
         {pendingPlay ? (
