@@ -1,11 +1,11 @@
 /**
- * 學習筆記（三職業平衡試玩／2026-09-13o）：
- * 1) 三棋子常駐：騎／槍／法；選職業＝選棋子＋看手牌；全結束才進下一輪。
- * 2) 有效傷王 → 抽王牌庫 N 格＋地形袋種類威脅序鋪放；輪末零傷才鋪 2 punish。
- * 3) 騎士攻擊須指定鄰 1 目標（王或可拆牆）；取消指定仍可用。
- * 4) 重製先填設定表（半徑／王HP／牌庫）再出生點；手牌上限 7/7/8。
+ * 學習筆記（三職業平衡試玩／2026-09-13t）：
+ * 1) 必須經重製開局（initial phase=reset-setup）；牌庫預設 15（6 基礎＋4 小技×2＋1 大招）。
+ * 2) 出局離場：空格改未老化一般並登錄老化；已有地形不重複鋪；不畫棋子、不佔格。
+ * 3) 吸咒達 cap 立刻出局（槍／法 1、騎 2）；不可停在 cap。
+ * 4) 越打越擠是主軸；r=5／78 袋為刻意。難度可疊加；灰項只留代價移動（即原 C 版），置底不實作。
  */
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import {
   EMPTY_AMMO_SLOT,
   GUNNER_CARD_DEFS,
@@ -46,20 +46,31 @@ import {
 } from '@core/cards/knight/index.js';
 import {
   BOSS_HEX,
+  absorbCursesAlongPath,
+  basicMoveCap,
   canStandAt,
   createOpeningBoard,
+  curseCarryCap,
+  curseFullAfterAbsorb,
   getTile,
   hexKey,
+  isAdjacentToMud,
+  isAdjacentToSilence,
   kindAllowsCrack,
   placeTerrain,
+  placeUnagedPlainIfEmpty,
   shortestPath,
   type Board,
 } from '@core/board/index.js';
 import {
   DEFAULT_MAP_RADIUS,
+  isSealed,
+  wouldEliminate,
 } from '@core/enclosure/index.js';
 import {
   advanceWallAging,
+  applyDifficultyBag,
+  pickInteriorEmptyHexes,
   pickThreatPlacementHexes,
   type ThreatActor,
 } from '@core/turn/index.js';
@@ -92,11 +103,52 @@ const HAND_CAP: Record<ClassId, number> = {
   mage: 8,
 };
 
+/** 官方起手張數（牌庫預設 15，其餘進抽牌堆）。 */
+const OPENING_HAND = 4;
+
 
 const BOSS_HP_DEFAULT = 20;
 
 type BossCountCard = { n: 2 | 3 | 4 };
-type KindToken = 'plain' | 'plain_aged' | 'curse' | 'silence';
+type KindToken = 'plain' | 'plain_aged' | 'curse' | 'silence' | 'mud';
+
+const DEFAULT_KIND_PRIORITY: Record<KindToken, number> = {
+  silence: 50,
+  curse: 32,
+  mud: 22,
+  plain: 10,
+  plain_aged: 0,
+};
+
+type DifficultyFlags = {
+  solidWalls: boolean;
+  hardStep: boolean;
+  silence: boolean;
+  madCurse: boolean;
+  madPressure: boolean;
+};
+
+const DEFAULT_DIFFICULTY: DifficultyFlags = {
+  solidWalls: false,
+  hardStep: false,
+  silence: false,
+  madCurse: false,
+  madPressure: false,
+};
+
+/** 活選項（可疊加；確認時由預設＋旗標重算袋）。灰項見表單底部。 */
+const LIVE_DIFFICULTIES: readonly {
+  key: keyof DifficultyFlags;
+  n: number;
+  label: string;
+  hint: string;
+}[] = [
+  { key: 'solidWalls', n: 1, label: '堅固圍牆', hint: '開場 6 牆改完整、未老化、不進老化表' },
+  { key: 'hardStep', n: 2, label: '寸步難移', hint: '出生後內圈空格鋪 3 泥濘' },
+  { key: 'silence', n: 3, label: '沉默無聲', hint: '沉默 +1，從一般格扣 1' },
+  { key: 'madCurse', n: 5, label: '瘋狂詛咒', hint: '詛咒約一般格 1/3，總格不變' },
+  { key: 'madPressure', n: 6, label: '瘋狂壓力', hint: '4 格牌 +2、2 格牌 −2，袋 +4 一般格' },
+];
 
 type ResetSetup = {
   mapRadius: number;
@@ -109,7 +161,15 @@ type ResetSetup = {
   intactWalls: number;
   curseTiles: number;
   silenceTiles: number;
+  mudTiles: number;
+  kindPriority: Record<KindToken, number>;
+  extraSmallIds: Record<ClassId, string[]>;
+  difficulty: DifficultyFlags;
 };
+
+function emptyExtraSmall(): Record<ClassId, string[]> {
+  return { knight: [], gunner: [], mage: [] };
+}
 
 const DEFAULT_RESET_SETUP: ResetSetup = {
   mapRadius: DEFAULT_MAP_RADIUS,
@@ -119,10 +179,41 @@ const DEFAULT_RESET_SETUP: ResetSetup = {
   place3: 12,
   place4: 3,
   agedWalls: 0,
-  intactWalls: 16,
-  curseTiles: 13,
+  intactWalls: 62,
+  curseTiles: 15,
   silenceTiles: 1,
+  mudTiles: 0,
+  kindPriority: { ...DEFAULT_KIND_PRIORITY },
+  extraSmallIds: emptyExtraSmall(),
+  difficulty: { ...DEFAULT_DIFFICULTY },
 };
+
+function defaultBagCounts() {
+  return {
+    place2: DEFAULT_RESET_SETUP.place2,
+    place3: DEFAULT_RESET_SETUP.place3,
+    place4: DEFAULT_RESET_SETUP.place4,
+    agedWalls: DEFAULT_RESET_SETUP.agedWalls,
+    intactWalls: DEFAULT_RESET_SETUP.intactWalls,
+    curseTiles: DEFAULT_RESET_SETUP.curseTiles,
+    silenceTiles: DEFAULT_RESET_SETUP.silenceTiles,
+    mudTiles: DEFAULT_RESET_SETUP.mudTiles,
+  };
+}
+
+/** 確認重製：袋／放置由預設＋旗標重算；半徑／王HP／小技來自表單。 */
+function applyDifficultyToSetup(draft: ResetSetup): ResetSetup {
+  const bag = applyDifficultyBag(defaultBagCounts(), {
+    silence: draft.difficulty.silence,
+    madCurse: draft.difficulty.madCurse,
+    madPressure: draft.difficulty.madPressure,
+  });
+  return { ...draft, ...bag };
+}
+
+function openingBoardOpts(flags: DifficultyFlags) {
+  return flags.solidWalls ? { intactUnagedStarterWalls: true } : {};
+}
 
 function shuffleInPlace<T>(arr: T[]): T[] {
   for (let i = arr.length - 1; i > 0; i--) {
@@ -147,12 +238,14 @@ function buildKindBag(
   intact: number,
   curse: number,
   silence: number,
+  mud: number,
 ): KindToken[] {
   const bag: KindToken[] = [];
   for (let i = 0; i < intact; i++) bag.push('plain');
   for (let i = 0; i < aged; i++) bag.push('plain_aged');
   for (let i = 0; i < curse; i++) bag.push('curse');
   for (let i = 0; i < silence; i++) bag.push('silence');
+  for (let i = 0; i < mud; i++) bag.push('mud');
   return shuffleInPlace(bag);
 }
 
@@ -160,6 +253,7 @@ function summarizeBossDeck(
   deck: readonly BossCountCard[],
   bag: readonly KindToken[],
   showAged: boolean,
+  showMud: boolean,
 ): BossDeckHoverInfo {
   const byN = { n2: 0, n3: 0, n4: 0 };
   for (const c of deck) {
@@ -167,18 +261,20 @@ function summarizeBossDeck(
     else if (c.n === 3) byN.n3 += 1;
     else byN.n4 += 1;
   }
-  const byKind = { plain: 0, plainAged: 0, curse: 0, silence: 0 };
+  const byKind = { plain: 0, plainAged: 0, curse: 0, silence: 0, mud: 0 };
   for (const t of bag) {
     if (t === 'plain') byKind.plain += 1;
     else if (t === 'plain_aged') byKind.plainAged += 1;
     else if (t === 'curse') byKind.curse += 1;
-    else byKind.silence += 1;
+    else if (t === 'silence') byKind.silence += 1;
+    else if (t === 'mud') byKind.mud += 1;
   }
   return {
     remainingCards: deck.length,
     byN,
     byKind,
     showAged,
+    showMud,
   };
 }
 
@@ -193,6 +289,8 @@ const COLOR_END = { fill: '#5a5a5a', stroke: '#9a9a9a' };
 type ClassActor = {
   hex: Axial;
   hand: HandCard[];
+  /** 剩餘抽牌堆（開場 15−4；輪初抽 1）。 */
+  deck: HandCard[];
   movesLeft: number;
   actionsLeft: number;
   moveLocked: boolean;
@@ -203,6 +301,8 @@ type ClassActor = {
   mayPlayShotIgnoreRange: boolean;
   curseStacks: number;
   drawSeq: number;
+  sealed: boolean;
+  eliminated: boolean;
 };
 
 type Actors = Record<ClassId, ClassActor>;
@@ -273,95 +373,53 @@ function enrichCard(
   };
 }
 
-function buildGunnerHand(): HandCard[] {
-  const ids: GunnerCardId[] = [
-    'shot',
-    'shot',
-    'shot',
-    'playful_bottle',
-    'mischief_bottle',
-    'turbulence',
-    'power_up',
-    'big_show',
+/** 預設 15 張：6 基礎 + 4 小技×2 + 1 大招。重製可再加 0–2 張小技各 +1。 */
+const BASIC_CARD: Record<ClassId, string> = {
+  knight: 'attack',
+  gunner: 'shot',
+  mage: 'magic_arrow',
+};
+const SMALL_SKILLS: Record<ClassId, readonly string[]> = {
+  knight: ['heroic_charge', 'faith', 'taunt', 'devotion'],
+  gunner: ['playful_bottle', 'mischief_bottle', 'turbulence', 'power_up'],
+  mage: ['amplify', 'wind', 'focus', 'barrier'],
+};
+const ULT_CARD: Record<ClassId, string> = {
+  knight: 'undying',
+  gunner: 'big_show',
+  mage: 'planar_swap',
+};
+
+function defFor(id: ClassId, cardId: string) {
+  if (id === 'gunner') return GUNNER_CARD_DEFS[cardId as GunnerCardId];
+  if (id === 'mage') return MAGE_CARD_DEFS[cardId as MageCardId];
+  return KNIGHT_CARD_DEFS[cardId as KnightCardId];
+}
+
+function buildShuffledDeck(
+  id: ClassId,
+  seqBase: number,
+  extraSmallIds: string[] = [],
+): HandCard[] {
+  const extras = extraSmallIds.filter((s) => SMALL_SKILLS[id].includes(s));
+  const ids: string[] = [
+    ...Array(6).fill(BASIC_CARD[id]),
+    ...SMALL_SKILLS[id].flatMap((s) => [s, s]),
+    ULT_CARD[id],
+    ...extras,
   ];
+  shuffleInPlace(ids);
+  const prefix = id === 'gunner' ? 'g' : id === 'mage' ? 'm' : 'k';
   return ids.map((cardId, i) => {
-    const def = GUNNER_CARD_DEFS[cardId];
+    const def = defFor(id, cardId);
     return enrichCard(
-      `g-${i}-${cardId}`,
+      `${prefix}-${seqBase}-${i}-${cardId}`,
       cardId,
       def.name,
       def.countsTowardAction,
       def.silenced,
     );
   });
-}
-
-function buildMageHand(): HandCard[] {
-  const ids: MageCardId[] = [
-    'magic_arrow',
-    'magic_arrow',
-    'amplify',
-    'wind',
-    'focus',
-    'barrier',
-    'planar_swap',
-  ];
-  return ids.map((cardId, i) => {
-    const def = MAGE_CARD_DEFS[cardId];
-    return enrichCard(
-      `m-${i}-${cardId}`,
-      cardId,
-      def.name,
-      def.countsTowardAction,
-      def.silenced,
-    );
-  });
-}
-
-function buildKnightHand(): HandCard[] {
-  const ids: KnightCardId[] = [
-    'attack',
-    'attack',
-    'faith',
-    'heroic_charge',
-    'taunt',
-    'devotion',
-    'undying',
-  ];
-  return ids.map((cardId, i) => {
-    const def = KNIGHT_CARD_DEFS[cardId];
-    return enrichCard(
-      `k-${i}-${cardId}`,
-      cardId,
-      def.name,
-      def.countsTowardAction,
-      def.silenced,
-    );
-  });
-}
-
-function buildHand(id: ClassId): HandCard[] {
-  if (id === 'gunner') return buildGunnerHand();
-  if (id === 'mage') return buildMageHand();
-  return buildKnightHand();
-}
-
-function makeDrawStubCard(id: ClassId, seq: number): HandCard {
-  const cardId =
-    id === 'gunner' ? 'shot' : id === 'mage' ? 'magic_arrow' : 'attack';
-  const def =
-    id === 'gunner'
-      ? GUNNER_CARD_DEFS.shot
-      : id === 'mage'
-        ? MAGE_CARD_DEFS.magic_arrow
-        : KNIGHT_CARD_DEFS.attack;
-  return enrichCard(
-    `draw-${id}-${seq}-${cardId}`,
-    cardId,
-    def.name,
-    def.countsTowardAction,
-    def.silenced,
-  );
 }
 
 function applyHandCap(
@@ -375,12 +433,52 @@ function applyHandCap(
   return { hand: keep, discarded };
 }
 
-function freshActor(id: ClassId, hex: Axial): ClassActor {
-  const { hand } = applyHandCap(id, buildHand(id));
+/** 從牌庫抽 count 張；不足則 short。新手牌超過上限時棄最新。 */
+function drawFromDeck(
+  id: ClassId,
+  actor: ClassActor,
+  count: number,
+): {
+  actor: ClassActor;
+  drawn: HandCard[];
+  discarded: HandCard[];
+  short: boolean;
+} {
+  if (count <= 0) {
+    return { actor, drawn: [], discarded: [], short: false };
+  }
+  const take = Math.min(count, actor.deck.length);
+  const drawn = actor.deck.slice(0, take);
+  const rest = actor.deck.slice(take);
+  const { hand, discarded } = applyHandCap(id, [...actor.hand, ...drawn]);
+  return {
+    actor: {
+      ...actor,
+      hand,
+      deck: rest,
+      drawSeq: actor.drawSeq + drawn.length,
+    },
+    drawn,
+    discarded,
+    short: drawn.length < count,
+  };
+}
+
+function freshActor(
+  id: ClassId,
+  hex: Axial,
+  board: Board,
+  extraSmallIds: string[] = [],
+): ClassActor {
+  const all = buildShuffledDeck(id, 0, extraSmallIds);
+  const rawHand = all.slice(0, OPENING_HAND);
+  const deck = all.slice(OPENING_HAND);
+  const { hand } = applyHandCap(id, rawHand);
   return {
     hex,
     hand,
-    movesLeft: TURN_MOVES_PER_ROUND,
+    deck,
+    movesLeft: basicMoveCap(board, hex, TURN_MOVES_PER_ROUND),
     actionsLeft: TURN_ACTIONS_PER_ROUND,
     moveLocked: false,
     hasMovedThisTurn: false,
@@ -388,15 +486,21 @@ function freshActor(id: ClassId, hex: Axial): ClassActor {
     ammo: EMPTY_AMMO_SLOT,
     amplifiedPending: false,
     mayPlayShotIgnoreRange: false,
-    curseStacks: id === 'knight' ? 2 : 0,
-    drawSeq: 0,
+    curseStacks: 0,
+    drawSeq: 1,
+    sealed: false,
+    eliminated: false,
   };
 }
 
-function bootActors(hexes: Record<ClassId, Axial>): Actors {
+function bootActors(
+  hexes: Record<ClassId, Axial>,
+  board: Board = createOpeningBoard(),
+  extras: Record<ClassId, string[]> = emptyExtraSmall(),
+): Actors {
   const actors = {} as Actors;
   for (const id of CLASS_ORDER) {
-    actors[id] = freshActor(id, hexes[id]);
+    actors[id] = freshActor(id, hexes[id], board, extras[id] ?? []);
   }
   return actors;
 }
@@ -451,14 +555,6 @@ function lookupCountsTowardAction(id: ClassId, cardId: string): boolean {
   return KNIGHT_CARD_DEFS[cardId as KnightCardId]?.countsTowardAction ?? false;
 }
 
-function hasStandableNeighbor(
-  board: Board,
-  hex: Axial,
-  occupied: readonly Axial[],
-): boolean {
-  return neighbors(hex).some((n) => canStandAt(board, n, { occupied }));
-}
-
 function axialDirectionToward(from: Axial, toward: Axial): Axial | null {
   if (equals(from, toward)) return null;
   for (const dir of AXIAL_DIRECTIONS) {
@@ -483,27 +579,35 @@ function pendingHint(p: PendingPlay | null): string {
   if (p.kind === 'heroic_charge') return '指定衝鋒方向：點直線上任一格（或鄰格）';
   if (p.kind === 'undying') return '指定復活落點（可站格）';
   if (p.kind === 'devotion') return '指定鄰 1 友軍格（吸咒）';
-  if (p.kind === 'attack') return '指定鄰 1 目標（王或可拆牆）';
+  if (p.kind === 'attack') return '指定鄰 1：王或可拆牆（不能打其他職業）';
   return '';
 }
 
-/** 騎士攻擊可選鄰 1：王或可拆 plain 系；排除友軍／沉默／詛咒／懲罰。 */
+/** 騎士攻擊可選鄰 1：王或可拆牆。不可選其他職業。 */
+function occupantAt(actors: Actors, hex: Axial, self?: ClassId): ClassId | null {
+  for (const id of CLASS_ORDER) {
+    if (self && id === self) continue;
+    if (equals(actors[id].hex, hex) && !actors[id].eliminated) return id;
+  }
+  return null;
+}
+
 function listKnightAttackTargets(
   board: Board,
   attacker: Axial,
   actors: Actors,
   self: ClassId,
 ): Axial[] {
-  const otherHexes = occupiedExcept(actors, self);
   return neighbors(attacker).filter((h) => {
-    if (otherHexes.some((o) => equals(o, h))) return false;
-    if (equals(h, BOSS_HEX)) return true;
+    if (occupantAt(actors, h, self)) return false;
     const tile = getTile(board, h);
+    if (equals(h, BOSS_HEX)) return true;
     if (!tile) return false;
     if (
       tile.kind === 'silence' ||
       tile.kind === 'curse' ||
-      tile.kind === 'punish'
+      tile.kind === 'punish' ||
+      tile.kind === 'mud'
     ) {
       return false;
     }
@@ -512,20 +616,54 @@ function listKnightAttackTargets(
 }
 
 function occupiedExcept(actors: Actors, self: ClassId): Axial[] {
-  return CLASS_ORDER.filter((id) => id !== self).map((id) => actors[id].hex);
+  return CLASS_ORDER.filter((id) => id !== self && !actors[id].eliminated).map(
+    (id) => actors[id].hex,
+  );
 }
 
 function allHexes(actors: Actors): Axial[] {
-  return CLASS_ORDER.map((id) => actors[id].hex);
+  return CLASS_ORDER.filter((id) => !actors[id].eliminated).map(
+    (id) => actors[id].hex,
+  );
 }
 
 function toThreatActors(actors: Actors): ThreatActor[] {
-  return CLASS_ORDER.map((id) => ({
+  return CLASS_ORDER.filter((id) => !actors[id].eliminated).map((id) => ({
     id,
     hex: actors[id].hex,
     role: id === 'knight' ? 'melee' : 'ranged',
     curseStacks: actors[id].curseStacks,
   }));
+}
+
+function markEliminated(actor: ClassActor): ClassActor {
+  if (actor.eliminated) return actor;
+  return {
+    ...actor,
+    eliminated: true,
+    endedThisRound: true,
+    movesLeft: 0,
+    actionsLeft: 0,
+    moveLocked: false,
+  };
+}
+
+function leaveActor(
+  board: Board,
+  actorsSnap: Actors,
+  id: ClassId,
+): { board: Board; actors: Actors; ageKey: string | null; did: boolean } {
+  const a = actorsSnap[id];
+  if (a.eliminated) {
+    return { board, actors: actorsSnap, ageKey: null, did: false };
+  }
+  const left = placeUnagedPlainIfEmpty(board, a.hex);
+  return {
+    board: left.board,
+    actors: { ...actorsSnap, [id]: markEliminated(a) },
+    ageKey: left.placed ? hexKey(a.hex) : null,
+    did: true,
+  };
 }
 
 function collectProtected(
@@ -556,18 +694,42 @@ function hasPlayableCard(actor: ClassActor, id: ClassId): boolean {
   });
 }
 
+function pathOptsFor(
+  actors: Actors,
+  self: ClassId,
+): { occupied: Axial[]; curseCarry: { stacks: number; cap: number } } {
+  const me = actors[self];
+  return {
+    occupied: occupiedExcept(actors, self),
+    curseCarry: {
+      stacks: me.curseStacks,
+      cap: curseCarryCap(self),
+    },
+  };
+}
+
 const INITIAL_HEXES = { ...START_HEX };
 const INITIAL_ACTORS = bootActors(INITIAL_HEXES);
 
 export function App() {
-  const [phase, setPhase] = useState<Phase>('playing');
+  const [phase, setPhase] = useState<Phase>('reset-setup');
+  const [hasStarted, setHasStarted] = useState(false);
   const [spawnStep, setSpawnStep] = useState(0); // 0騎 1槍 2法
   const [spawnHexes, setSpawnHexes] = useState<Partial<Record<ClassId, Axial>>>(
     {},
   );
   const [resetDraft, setResetDraft] = useState<ResetSetup>(() => ({
     ...DEFAULT_RESET_SETUP,
+    kindPriority: { ...DEFAULT_KIND_PRIORITY },
+    extraSmallIds: emptyExtraSmall(),
+    difficulty: { ...DEFAULT_DIFFICULTY },
   }));
+  const [matchExtraSmall, setMatchExtraSmall] = useState<Record<ClassId, string[]>>(
+    () => emptyExtraSmall(),
+  );
+  const [matchDifficulty, setMatchDifficulty] = useState<DifficultyFlags>(
+    () => ({ ...DEFAULT_DIFFICULTY }),
+  );
   const [mapRadius, setMapRadius] = useState(DEFAULT_MAP_RADIUS);
   const [bossHpMax, setBossHpMax] = useState(BOSS_HP_DEFAULT);
   const [showAgedInDeck, setShowAgedInDeck] = useState(false);
@@ -584,11 +746,14 @@ export function App() {
       DEFAULT_RESET_SETUP.intactWalls,
       DEFAULT_RESET_SETUP.curseTiles,
       DEFAULT_RESET_SETUP.silenceTiles,
+      DEFAULT_RESET_SETUP.mudTiles,
     ),
   );
-
+  const [showMudInDeck, setShowMudInDeck] = useState(false);
   const [selected, setSelected] = useState<ClassId>('gunner');
   const [actors, setActors] = useState<Actors>(() => INITIAL_ACTORS);
+  const actorsRef = useRef(actors);
+  actorsRef.current = actors;
   const [board, setBoard] = useState<Board>(() => createOpeningBoard());
   const [bossHp, setBossHp] = useState(BOSS_HP_DEFAULT);
   const [won, setWon] = useState(false);
@@ -600,7 +765,7 @@ export function App() {
     [],
   );
   const [log, setLog] = useState<string[]>(() => [
-    '薄 UI：三職業平衡試玩。開場老化牆。傷王抽牌鋪地形；三人皆結束才進下一輪。',
+    '薄 UI：請先重製設定再開局。越打越擠是主軸。',
   ]);
   const [toast, setToast] = useState('');
   const [pendingPlay, setPendingPlay] = useState<PendingPlay | null>(null);
@@ -612,7 +777,6 @@ export function App() {
   const [isOthersTurn, setIsOthersTurn] = useState(false);
   const [isDead, setIsDead] = useState(false);
   const [atRoundEndAfterActors, setAtRoundEndAfterActors] = useState(false);
-  const [allyCurseStacks, setAllyCurseStacks] = useState(1);
   const [endConfirmFor, setEndConfirmFor] = useState<ClassId | null>(null);
   const [lastDraw, setLastDraw] = useState('');
 
@@ -630,11 +794,13 @@ export function App() {
   const curseStacks = me.curseStacks;
 
   const allyId = useMemo(() => {
-    const others = CLASS_ORDER.filter((id) => id !== selected);
+    const others = CLASS_ORDER.filter(
+      (id) => id !== selected && !actors[id].eliminated,
+    );
     const adj = others.find(
       (id) => distance(actors[selected].hex, actors[id].hex) === 1,
     );
-    return adj ?? others[0]!;
+    return adj ?? others[0] ?? CLASS_ORDER.find((id) => id !== selected)!;
   }, [actors, selected]);
   const allyHex = actors[allyId].hex;
 
@@ -649,8 +815,9 @@ export function App() {
     if (me.endedThisRound) return null;
     if (equals(hoverHex, unitHex)) return null;
     if (movesLeft <= 0) return null;
-    const occupied = occupiedExcept(actors, selected);
-    const path = shortestPath(board, unitHex, hoverHex, { occupied });
+    if (me.eliminated) return null;
+    const opts = pathOptsFor(actors, selected);
+    const path = shortestPath(board, unitHex, hoverHex, opts);
     if (path === null) return null;
     const steps = path.length - 1;
     if (steps < 1) return null;
@@ -679,11 +846,13 @@ export function App() {
     hoveredCard?.cardId === 'shot' || hoveredCard?.cardId === 'magic_arrow';
 
   const bossDeckInfo = useMemo(
-    () => summarizeBossDeck(bossDeck, kindBag, showAgedInDeck),
-    [bossDeck, kindBag, showAgedInDeck],
+    () => summarizeBossDeck(bossDeck, kindBag, showAgedInDeck, showMudInDeck),
+    [bossDeck, kindBag, showAgedInDeck, showMudInDeck],
   );
 
-  const boardActors: BoardActorView[] = CLASS_ORDER.map((id) => {
+  const boardActors: BoardActorView[] = CLASS_ORDER.filter(
+    (id) => !actors[id].eliminated,
+  ).map((id) => {
     const a = actors[id];
     const colors = a.endedThisRound
       ? COLOR_END
@@ -696,6 +865,10 @@ export function App() {
       hex: a.hex,
       fill: colors.fill,
       stroke: colors.stroke,
+      curseStacks: a.curseStacks,
+      sealed: a.sealed,
+      eliminated: false,
+      adjacentSilence: isAdjacentToSilence(board, a.hex),
     };
   });
 
@@ -708,6 +881,140 @@ export function App() {
     setLog((prev) => [...prev, line]);
   }
 
+  /** 盤面變更後：封印標誌／出局離場（壓封印者本體或之後任何出局）。 */
+  function syncEnclosureOnBoard(
+    boardNow: Board,
+    actorsSnap: Actors,
+    placedHexes: readonly Axial[] = [],
+  ): { board: Board; actors: Actors; ageKeys: string[] } {
+    const bounds = { radius: mapRadius };
+    let boardOut = boardNow;
+    let next = { ...actorsSnap } as Actors;
+    const ageKeys: string[] = [];
+    const sealedLogs: string[] = [];
+    const elimLogs: string[] = [];
+
+    for (const placed of placedHexes) {
+      for (const id of CLASS_ORDER) {
+        const a = next[id];
+        if (a.eliminated) continue;
+        if (wouldEliminate(boardOut, a.hex, bounds, placed)) {
+          const left = leaveActor(boardOut, next, id);
+          boardOut = left.board;
+          next = left.actors;
+          if (left.ageKey) ageKeys.push(left.ageKey);
+          next[id] = { ...next[id], sealed: true };
+          elimLogs.push(`【出局】${classLabel(id)} 出局，離場，格改一般`);
+        }
+      }
+    }
+
+    for (const id of CLASS_ORDER) {
+      const a = next[id];
+      if (a.eliminated) continue;
+      const sealed = isSealed(boardOut, a.hex, bounds);
+      if (sealed && !a.sealed) {
+        sealedLogs.push(`【封印】${classLabel(id)} → 封`);
+      }
+      if (sealed !== a.sealed) {
+        next[id] = { ...a, sealed };
+      }
+    }
+
+    for (const line of elimLogs) pushLog(line);
+    for (const line of sealedLogs) pushLog(line);
+    if (elimLogs.length > 0) {
+      setToast(elimLogs[elimLogs.length - 1]!.replace('【出局】', ''));
+    } else if (sealedLogs.length > 0) {
+      setToast(sealedLogs[sealedLogs.length - 1]!.replace('【封印】', '封印：'));
+    }
+    return { board: boardOut, actors: next, ageKeys };
+  }
+
+  function maybeLoseIfAllOut(next: Actors, hpNow: number): boolean {
+    if (hpNow <= 0) return false;
+    if (!CLASS_ORDER.every((id) => next[id].eliminated)) return false;
+    setLost(true);
+    pushLog('【敗北】三人皆出局，王仍存活');
+    setToast('敗北：全員出局');
+    return true;
+  }
+
+  function finishRoundIfAllDone(
+    boardNow: Board,
+    nextActors: Actors,
+    damaged: boolean,
+  ) {
+    if (CLASS_ORDER.every((c) => nextActors[c].eliminated)) return;
+    const allDone = CLASS_ORDER.every(
+      (c) => nextActors[c].endedThisRound || nextActors[c].eliminated,
+    );
+    if (!allDone) return;
+    finishRound(
+      boardNow,
+      nextActors,
+      aging,
+      wallsPlacedThisRound,
+      damaged,
+    );
+  }
+
+  function applyCurseFullIfNeeded(
+    boardNow: Board,
+    actorsSnap: Actors,
+    id: ClassId,
+    absorbedCount: number,
+  ): { board: Board; actors: Actors; ageKeys: string[] } {
+    const a = actorsSnap[id];
+    if (
+      a.eliminated ||
+      !curseFullAfterAbsorb(id, a.curseStacks, absorbedCount)
+    ) {
+      return { board: boardNow, actors: actorsSnap, ageKeys: [] };
+    }
+    const left = leaveActor(boardNow, actorsSnap, id);
+    if (left.did) {
+      pushLog(`【出局】${classLabel(id)} 出局，離場，格改一般`);
+      setToast(`${classLabel(id)} 出局，離場，格改一般`);
+    }
+    return {
+      board: left.board,
+      actors: left.actors,
+      ageKeys: left.ageKey ? [left.ageKey] : [],
+    };
+  }
+
+  function applyBoardAndEnclosure(
+    boardNow: Board,
+    actorsSnap?: Actors,
+    placedHexes: readonly Axial[] = [],
+    extraAgeKeys: string[] = [],
+    opts?: { hpNow?: number; canAdvanceRound?: boolean; damaged?: boolean },
+  ) {
+    const base = actorsSnap ?? actors;
+    const synced = syncEnclosureOnBoard(boardNow, base, placedHexes);
+    const ageKeys = [...extraAgeKeys, ...synced.ageKeys];
+    setBoard(synced.board);
+    setActors(synced.actors);
+    if (ageKeys.length > 0) {
+      setWallsPlacedThisRound((w) => [...w, ...ageKeys]);
+    }
+    const hpNow = opts?.hpNow ?? bossHp;
+    const lostAll = maybeLoseIfAllOut(synced.actors, hpNow);
+    if (
+      opts?.canAdvanceRound !== false &&
+      !lostAll &&
+      hpNow > 0
+    ) {
+      finishRoundIfAllDone(
+        synced.board,
+        synced.actors,
+        opts?.damaged ?? bossDamagedThisRound,
+      );
+    }
+    return synced;
+  }
+
   function patchActor(id: ClassId, patch: Partial<ClassActor>) {
     setActors((prev) => ({
       ...prev,
@@ -715,14 +1022,18 @@ export function App() {
     }));
   }
 
+  function commitActors(next: Actors) {
+    actorsRef.current = next;
+    setActors(next);
+  }
+
   function updateActor(
     id: ClassId,
     updater: (a: ClassActor) => ClassActor,
   ) {
-    setActors((prev) => ({
-      ...prev,
-      [id]: updater(prev[id]),
-    }));
+    const snap = actorsRef.current;
+    const next: Actors = { ...snap, [id]: updater(snap[id]) };
+    commitActors(next);
   }
 
   function clearPending(note?: string) {
@@ -747,8 +1058,15 @@ export function App() {
   }
 
   /** 有效傷王：扣 HP＋抽王牌庫 N 格並依地形袋鋪放。 */
-  function noteBossDamage(amount: number) {
+  function noteBossDamage(
+    amount: number,
+    liveBoard: Board = board,
+    extraExclude: Axial[] = [],
+    liveActors?: Actors,
+    extraAgeKeys: string[] = [],
+  ) {
     if (amount <= 0 || won || lost) return;
+    const actorsForThreat = liveActors ?? actors;
     setBossDamagedThisRound(true);
     const hpAfter = Math.max(0, bossHp - amount);
     setBossHp(hpAfter);
@@ -773,47 +1091,59 @@ export function App() {
     setBossDeck(restDeck);
 
     const protectedHexes = collectProtected(tauntRestriction, barrierAura);
-    const exclude = wallsPlacedThisRound.map((k) => {
-      const [q, r] = k.split(',').map(Number);
-      return { q: q!, r: r! };
-    });
+    const exclude = [
+      ...wallsPlacedThisRound.map((k) => {
+        const [q, r] = k.split(',').map(Number);
+        return { q: q!, r: r! };
+      }),
+      ...extraExclude,
+    ];
     const picks = pickThreatPlacementHexes(
-      board,
-      toThreatActors(actors),
+      liveBoard,
+      toThreatActors(actorsForThreat),
       card.n,
       {
-        occupied: allHexes(actors),
+        occupied: allHexes(actorsForThreat),
         protectedHexes,
         bounds: { radius: mapRadius },
         exclude,
+        crushHexes: CLASS_ORDER.filter(
+          (id) =>
+            actorsForThreat[id].sealed && !actorsForThreat[id].eliminated,
+        ).map((id) => actorsForThreat[id].hex),
       },
     );
 
-    let boardNow = board;
+    let boardNow = liveBoard;
     let bagNow = [...kindBag];
     const placedParts: string[] = [];
     const ageKeys: string[] = [];
+    const take = Math.min(picks.length, bagNow.length);
+    const tokens = bagNow.slice(0, take);
+    bagNow = bagNow.slice(take);
 
-    for (const pick of picks) {
-      if (bagNow.length === 0) break;
-      const tok = bagNow.shift()!;
+    for (let i = 0; i < tokens.length; i++) {
+      const pick = picks[i]!;
+      const tok = tokens[i]!;
       if (tok === 'plain') {
         boardNow = placeTerrain(boardNow, pick, 'plain');
         ageKeys.push(hexKey(pick));
-        placedParts.push(`牆體@(${pick.q},${pick.r})`);
+        placedParts.push(`一般格@(${pick.q},${pick.r})`);
       } else if (tok === 'plain_aged') {
         boardNow = placeTerrain(boardNow, pick, 'plain', { aged: true });
-        placedParts.push(`老化牆體@(${pick.q},${pick.r})`);
+        placedParts.push(`老化@(${pick.q},${pick.r})`);
       } else if (tok === 'curse') {
         boardNow = placeTerrain(boardNow, pick, 'curse');
         placedParts.push(`詛咒@(${pick.q},${pick.r})`);
-      } else {
+      } else if (tok === 'silence') {
         boardNow = placeTerrain(boardNow, pick, 'silence');
         placedParts.push(`沉默@(${pick.q},${pick.r})`);
+      } else if (tok === 'mud') {
+        boardNow = placeTerrain(boardNow, pick, 'mud');
+        placedParts.push(`泥濘@(${pick.q},${pick.r})`);
       }
     }
 
-    setBoard(boardNow);
     setKindBag(bagNow);
     if (ageKeys.length > 0) {
       setWallsPlacedThisRound((w) => [...w, ...ageKeys]);
@@ -823,12 +1153,34 @@ export function App() {
     pushLog(
       `【王】抽了 ${card.n} 格，擺放：${placeDesc}（剩牌 ${restDeck.length}）`,
     );
+
+    let nextActors: Actors = { ...(liveActors ?? actors) };
+    for (const id of CLASS_ORDER) {
+      const a = nextActors[id];
+      if (a.eliminated) continue;
+      const cap = basicMoveCap(boardNow, a.hex, TURN_MOVES_PER_ROUND);
+      if (a.movesLeft > cap) {
+        nextActors = {
+          ...nextActors,
+          [id]: { ...a, movesLeft: cap },
+        };
+        if (cap === 1 && isAdjacentToMud(boardNow, a.hex)) {
+          pushLog(`【泥濘】${classLabel(id)} 基礎移動上限變 1（鄰泥濘）`);
+        }
+      }
+    }
+    applyBoardAndEnclosure(boardNow, nextActors, picks, extraAgeKeys, {
+      hpNow: hpAfter,
+      canAdvanceRound: hpAfter > 0,
+      damaged: true,
+    });
   }
 
   function finishRound(liveBoard: Board, liveActors: Actors, liveAging: Map<string, number>, liveWalls: string[], damaged: boolean) {
     const logs: string[] = [];
     let boardNow = liveBoard;
     let agingNow = liveAging;
+    let punishPicks: Axial[] = [];
 
     if (!damaged) {
       const protectedHexes = collectProtected(tauntRestriction, barrierAura);
@@ -842,6 +1194,7 @@ export function App() {
           bounds: { radius: mapRadius },
         },
       );
+      punishPicks = picks;
       if (picks.length === 0) {
         logs.push('【王】懲罰跳過：無空位');
       } else {
@@ -869,51 +1222,68 @@ export function App() {
     const nextRound = roundIndex + 1;
     logs.push(`【輪末】RoundEnded ${roundIndex} → 開 Round ${nextRound}`);
 
-    // 重置三人可行動；保留裝填；各抽 stub
-    const nextActors = { ...liveActors } as Actors;
+    // 重置三人可行動；保留裝填；各從牌庫抽 1
+    let nextActors = { ...liveActors } as Actors;
     const drawNames: string[] = [];
     for (const id of CLASS_ORDER) {
       const prev = liveActors[id];
+      if (prev.eliminated) {
+        nextActors[id] = {
+          ...prev,
+          movesLeft: 0,
+          actionsLeft: 0,
+          moveLocked: false,
+          hasMovedThisTurn: false,
+          endedThisRound: true,
+          amplifiedPending: false,
+          mayPlayShotIgnoreRange: false,
+        };
+        continue;
+      }
+      const moveCap = basicMoveCap(boardNow, prev.hex, TURN_MOVES_PER_ROUND);
+      if (moveCap === 1 && isAdjacentToMud(boardNow, prev.hex)) {
+        logs.push(`【泥濘】${classLabel(id)} 鄰泥濘，基礎移動上限 1`);
+      }
       let a: ClassActor = {
         ...prev,
-        movesLeft: TURN_MOVES_PER_ROUND,
+        movesLeft: moveCap,
         actionsLeft: TURN_ACTIONS_PER_ROUND,
         moveLocked: false,
         hasMovedThisTurn: false,
         endedThisRound: false,
         amplifiedPending: false,
         mayPlayShotIgnoreRange: false,
-        // ammo 保留
+        // ammo / deck / curseStacks 保留
       };
-      const stub = makeDrawStubCard(id, a.drawSeq);
-      const merged = [...a.hand, stub];
-      const { hand: capped, discarded } = applyHandCap(id, merged);
-      a = {
-        ...a,
-        hand: capped,
-        drawSeq: a.drawSeq + 1,
-      };
-      if (discarded.length > 0) {
-        logs.push(
-          `【手牌上限】${classLabel(id)} 棄最新 ${discarded.map((c) => c.name).join('、')}`,
-        );
-      } else {
-        drawNames.push(`${classLabel(id)}:${stub.name}`);
+      const pulled = drawFromDeck(id, a, 1);
+      a = pulled.actor;
+      if (pulled.short) {
+        logs.push(`【抽牌】${classLabel(id)} 牌庫空了`);
       }
-      // 若棄的是 stub 以外、stub 仍留下，也記抽到
-      if (discarded.length > 0 && capped.some((c) => c.instanceId === stub.instanceId)) {
-        drawNames.push(`${classLabel(id)}:${stub.name}`);
+      if (pulled.discarded.length > 0) {
+        logs.push(
+          `【手牌上限】${classLabel(id)} 棄最新 ${pulled.discarded.map((c) => c.name).join('、')}`,
+        );
+      }
+      for (const c of pulled.drawn) {
+        if (a.hand.some((h) => h.instanceId === c.instanceId)) {
+          drawNames.push(`${classLabel(id)}:${c.name}`);
+        }
       }
       nextActors[id] = a;
     }
     if (drawNames.length) {
-      logs.push(`【DrawStub】${drawNames.join('；')}`);
+      logs.push(`【抽牌】${drawNames.join('；')}`);
       setLastDraw(drawNames.join(' / '));
     }
 
+    const enc = syncEnclosureOnBoard(boardNow, nextActors, punishPicks);
+    boardNow = enc.board;
+    nextActors = enc.actors;
+    maybeLoseIfAllOut(nextActors, bossHp);
     setBoard(boardNow);
     setAging(agingNow);
-    setWallsPlacedThisRound([]);
+    setWallsPlacedThisRound(enc.ageKeys);
     setBossDamagedThisRound(false);
     setRoundIndex(nextRound);
     setActors(nextActors);
@@ -925,7 +1295,10 @@ export function App() {
     setToast(`第 ${nextRound} 輪開始（三人可行動）`);
   }
 
-  function endTurn(reason = '結束回合', opts?: { force?: boolean }) {
+  function endTurn(
+    reason = '結束回合',
+    opts?: { force?: boolean; actorsNow?: Actors },
+  ) {
     if (won) {
       pushLog('【結束回合】已勝利，停止操作');
       setToast('已勝利');
@@ -938,7 +1311,13 @@ export function App() {
     }
     if (phase !== 'playing') return;
     const id = selected;
-    const actor = actors[id];
+    const snapshot = opts?.actorsNow ?? actors;
+    const actor = snapshot[id];
+    if (actor.eliminated) {
+      pushLog(`【結束回合】${classLabel(id)} 已出局`);
+      setToast('已出局');
+      return;
+    }
     if (actor.endedThisRound) {
       pushLog(`【結束回合】${classLabel(id)} 本輪已結束`);
       setToast('本輪已結束');
@@ -946,16 +1325,12 @@ export function App() {
     }
 
     const stillMoves = actor.movesLeft > 0;
-    const stillPlay =
-      actor.actionsLeft > 0 && hasPlayableCard(actor, id);
-    // 不計次且 actions 用完仍可能有可出牌
-    const stillUncounted =
-      hasPlayableCard(actor, id) &&
-      actor.hand.some((c) => !lookupCountsTowardAction(id, c.cardId));
-    const canStillAct =
-      stillMoves ||
-      (actor.actionsLeft > 0 && hasPlayableCard(actor, id)) ||
-      stillUncounted;
+    const hasCountedPlayable = actor.hand.some((c) => {
+      if (!lookupCountsTowardAction(id, c.cardId)) return false;
+      if (actor.actionsLeft > 0) return true;
+      return c.cardId === 'shot' && actor.mayPlayShotIgnoreRange;
+    });
+    const canStillAct = stillMoves || hasCountedPlayable;
 
     if (!opts?.force && canStillAct && endConfirmFor !== id) {
       setEndConfirmFor(id);
@@ -966,16 +1341,20 @@ export function App() {
     }
 
     setEndConfirmFor(null);
+    setPendingPlay(null);
     const nextActors: Actors = {
-      ...actors,
+      ...snapshot,
       [id]: { ...actor, endedThisRound: true, moveLocked: false },
     };
-    setActors(nextActors);
+    commitActors(nextActors);
     pushLog(`【結束回合】${classLabel(id)}／${reason}`);
     setToast(`${classLabel(id)} 結束（灰）`);
-    setPendingPlay(null);
 
-    const allEnded = CLASS_ORDER.every((c) => nextActors[c].endedThisRound);
+    const allEnded = CLASS_ORDER.every(
+      (c) =>
+        (c === id ? true : nextActors[c].endedThisRound) ||
+        nextActors[c].eliminated,
+    );
     if (allEnded) {
       finishRound(
         board,
@@ -988,7 +1367,12 @@ export function App() {
   }
 
   function openResetSetup() {
-    setResetDraft({ ...DEFAULT_RESET_SETUP });
+    setResetDraft({
+      ...DEFAULT_RESET_SETUP,
+      kindPriority: { ...DEFAULT_KIND_PRIORITY },
+      extraSmallIds: emptyExtraSmall(),
+      difficulty: { ...DEFAULT_DIFFICULTY },
+    });
     setPhase('reset-setup');
     setPendingPlay(null);
     setEndConfirmFor(null);
@@ -1000,6 +1384,7 @@ export function App() {
     setBossHpMax(setup.bossHp);
     setBossHp(setup.bossHp);
     setShowAgedInDeck(setup.agedWalls > 0);
+    setShowMudInDeck(setup.mudTiles > 0);
     setBossDeck(buildBossDeck(setup.place2, setup.place3, setup.place4));
     setKindBag(
       buildKindBag(
@@ -1007,12 +1392,19 @@ export function App() {
         setup.intactWalls,
         setup.curseTiles,
         setup.silenceTiles,
+        setup.mudTiles,
       ),
     );
+    setMatchExtraSmall({
+      knight: [...setup.extraSmallIds.knight],
+      gunner: [...setup.extraSmallIds.gunner],
+      mage: [...setup.extraSmallIds.mage],
+    });
+    setMatchDifficulty({ ...setup.difficulty });
     setPhase('spawn-pick');
     setSpawnStep(0);
     setSpawnHexes({});
-    setBoard(createOpeningBoard());
+    setBoard(createOpeningBoard(openingBoardOpts(setup.difficulty)));
     setWon(false);
     setLost(false);
     setRoundIndex(0);
@@ -1031,7 +1423,8 @@ export function App() {
   }
 
   function confirmResetSetup() {
-    const s = resetDraft;
+    const s = applyDifficultyToSetup(resetDraft);
+    setResetDraft(s);
     const placeSum = s.place2 + s.place3 + s.place4;
     if (placeSum !== s.deckSize) {
       const msg = `放置張數合計 ${placeSum} ≠ 手卡張數 ${s.deckSize}`;
@@ -1039,10 +1432,15 @@ export function App() {
       pushLog(`【重製】${msg}`);
       return;
     }
+    const hexCapacity = s.place2 * 2 + s.place3 * 3 + s.place4 * 4;
     const kindSum =
-      s.agedWalls + s.intactWalls + s.curseTiles + s.silenceTiles;
-    if (kindSum !== s.deckSize) {
-      const msg = `地形袋合計 ${kindSum} ≠ 手卡張數 ${s.deckSize}`;
+      s.agedWalls +
+      s.intactWalls +
+      s.curseTiles +
+      s.silenceTiles +
+      s.mudTiles;
+    if (kindSum !== hexCapacity) {
+      const msg = `地形袋合計 ${kindSum} ≠ 可鋪總格數 ${hexCapacity}`;
       setToast(msg);
       pushLog(`【重製】${msg}`);
       return;
@@ -1051,26 +1449,81 @@ export function App() {
       setToast('地圖半徑建議 3–8');
       return;
     }
+    for (const id of CLASS_ORDER) {
+      const extras = s.extraSmallIds[id] ?? [];
+      const unique = [...new Set(extras)];
+      if (unique.length !== extras.length) {
+        setToast(`${classLabel(id)} 小技不可重複`);
+        return;
+      }
+      if (unique.length > 2) {
+        setToast(`${classLabel(id)} 小技最多加 2 張`);
+        return;
+      }
+      if (unique.some((c) => !SMALL_SKILLS[id].includes(c))) {
+        setToast(`${classLabel(id)} 小技不在該職業列表`);
+        return;
+      }
+    }
     beginSpawnPick(s);
   }
 
   function completeSpawnAndStart(hexes: Record<ClassId, Axial>) {
-    const next = bootActors(hexes);
+    let opening = createOpeningBoard(openingBoardOpts(matchDifficulty));
+    const mudNotes: string[] = [];
+    if (matchDifficulty.hardStep) {
+      const muds = pickInteriorEmptyHexes(
+        opening,
+        CLASS_ORDER.map((id) => hexes[id]),
+        mapRadius,
+        3,
+      );
+      for (const h of muds) {
+        opening = placeTerrain(opening, h, 'mud');
+      }
+      if (muds.length > 0) {
+        mudNotes.push(
+          `【寸步難移】內圈泥濘 ${muds.map((h) => `(${h.q},${h.r})`).join('、')}`,
+        );
+      } else {
+        mudNotes.push('【寸步難移】無空位可鋪泥濘');
+      }
+    }
+    const next = bootActors(hexes, opening, matchExtraSmall);
+    for (const id of CLASS_ORDER) {
+      const cap = basicMoveCap(opening, hexes[id], TURN_MOVES_PER_ROUND);
+      if (cap === 1 && isAdjacentToMud(opening, hexes[id])) {
+        mudNotes.push(`【泥濘】${classLabel(id)} 鄰泥濘，基礎移動上限 1`);
+      }
+    }
     setActors(next);
     setSelected('gunner');
+    setHasStarted(true);
     setPhase('playing');
     setSpawnHexes({});
     setSpawnStep(0);
-    setBoard(createOpeningBoard());
+    setBoard(opening);
     setWon(false);
     setLost(false);
     setRoundIndex(0);
     setBossDamagedThisRound(false);
     setAging(new Map());
     setWallsPlacedThisRound([]);
+    const extraNotes = CLASS_ORDER.flatMap((id) => {
+      const xs = matchExtraSmall[id];
+      return xs.length
+        ? [`【牌庫】${classLabel(id)} 加 ${xs.map((c) => defFor(id, c).name).join('、')}`]
+        : [];
+    });
+    const diffOn = LIVE_DIFFICULTIES.filter((d) => matchDifficulty[d.key]).map(
+      (d) => d.label,
+    );
     setLog([
       '薄 UI：三職業平衡試玩。出生完成。傷王抽牌鋪地形；三人皆結束才進下一輪。',
       `【出生】騎(${hexes.knight.q},${hexes.knight.r}) 槍(${hexes.gunner.q},${hexes.gunner.r}) 法(${hexes.mage.q},${hexes.mage.r})`,
+      ...mudNotes,
+      ...extraNotes,
+      ...(diffOn.length ? [`【難度】${diffOn.join('、')}`] : []),
     ]);
     setToast('對局開始');
   }
@@ -1129,9 +1582,19 @@ export function App() {
       setToast('已敗北，停止操作');
       return;
     }
+    if (me.eliminated) {
+      setToast('已出局，無法行動');
+      pushLog('【移動】拒絕：已出局');
+      return;
+    }
     if (me.endedThisRound) {
       setToast('本輪已結束（唯讀）');
       pushLog('【移動】拒絕：本輪已結束');
+      return;
+    }
+    if (me.sealed) {
+      setToast('已封印，無法移動');
+      pushLog('【移動】拒絕：已封印');
       return;
     }
     const tileDesc = describeHex(board, hex);
@@ -1150,15 +1613,20 @@ export function App() {
       return;
     }
 
-    const occupied = occupiedExcept(actors, selected);
-    const path = shortestPath(board, unitHex, hex, { occupied });
+    const opts = pathOptsFor(actors, selected);
+    const occupied = opts.occupied;
+    const path = shortestPath(board, unitHex, hex, opts);
     if (path === null) {
       const hitOther = occupied.some((o) => equals(o, hex));
+      const atCap = me.curseStacks >= curseCarryCap(selected);
+      const towardCurse = getTile(board, hex)?.kind === 'curse';
       const why = equals(hex, BOSS_HEX)
         ? '不可站王格'
         : hitOther
           ? '不可站其他職業格'
-          : `不可達或不可站：${tileDesc}`;
+          : atCap && towardCurse
+            ? '詛咒已達上限，不可再踩'
+            : `不可達或不可站：${tileDesc}`;
       pushLog(`${base} → 移動拒絕（${why}）`);
       setToast(`無法移動：${why}`);
       return;
@@ -1186,26 +1654,56 @@ export function App() {
     const from = unitHex;
     const dest = path[path.length - 1]!;
     const left = movesLeft - steps;
+    const cap = curseCarryCap(selected);
+    const absorbed = absorbCursesAlongPath(board, path, me.curseStacks, cap);
+    const blockCurse = absorbed.curseStacks >= cap;
     let nextLocked = true;
     let stuckUnlock = false;
     if (left <= 0) {
       nextLocked = false;
-    } else if (!hasStandableNeighbor(board, dest, occupied)) {
-      nextLocked = false;
-      stuckUnlock = true;
+    } else {
+      const canCont = neighbors(dest).some((n) =>
+        canStandAt(absorbed.board, n, { occupied, blockCurse }),
+      );
+      if (!canCont) {
+        nextLocked = false;
+        stuckUnlock = true;
+      }
     }
-    patchActor(selected, {
-      hex: dest,
-      hasMovedThisTurn: true,
-      movesLeft: left,
-      moveLocked: nextLocked,
-    });
+
+    const moved: Actors = {
+      ...actors,
+      [selected]: {
+        ...actors[selected],
+        hex: dest,
+        hasMovedThisTurn: true,
+        movesLeft: left,
+        moveLocked: nextLocked,
+        curseStacks: absorbed.curseStacks,
+      },
+    };
+    const curseLeave = applyCurseFullIfNeeded(
+      absorbed.board,
+      moved,
+      selected,
+      absorbed.absorbedHexes.length,
+    );
+    applyBoardAndEnclosure(
+      curseLeave.board,
+      curseLeave.actors,
+      [],
+      curseLeave.ageKeys,
+    );
     setEndConfirmFor(null);
 
     const via =
       steps === 2
         ? `經 (${path[1]!.q},${path[1]!.r}) 兩步一次套用`
         : '一步';
+    const curseNote =
+      absorbed.absorbedHexes.length > 0
+        ? ` · 吸咒×${absorbed.absorbedHexes.length}→層${absorbed.curseStacks}`
+        : '';
     const lockNote = nextLocked
       ? ' · 移動鎖定中（須走完才可出牌）'
       : stuckUnlock
@@ -1213,7 +1711,7 @@ export function App() {
         : ' · 移動完成，可出牌';
     pushLog(
       `【移動】${classLabel(selected)} (${from.q},${from.r}) → (${dest.q},${dest.r})` +
-        `（${via} · 剩餘移動 ${left}${lockNote}）`,
+        `（${via} · 剩餘移動 ${left}${curseNote}${lockNote}）`,
     );
     if (stuckUnlock) pushLog('無法續走，解鎖出牌');
     setToast(
@@ -1229,8 +1727,9 @@ export function App() {
     hex: Axial,
     pending: Extract<PendingPlay, { kind: 'turbulence' }>,
   ) {
-    const occupied = occupiedExcept(actors, selected);
-    const full = shortestPath(board, unitHex, hex, { occupied });
+    const opts = pathOptsFor(actors, selected);
+    const occupied = opts.occupied;
+    const full = shortestPath(board, unitHex, hex, opts);
     if (full === null) {
       pushLog(`【大亂流】目標不可達／不可站 (${hex.q},${hex.r})`);
       setToast('大亂流：目標不可達');
@@ -1256,25 +1755,50 @@ export function App() {
       setToast(`大亂流失敗：${result.reason}`);
       return;
     }
-    updateActor(selected, (a) => {
-      const drop = new Set([
-        pending.card.instanceId,
-        ...result.discardedBottleIds,
-      ]);
-      return {
-        ...a,
+    const cap = curseCarryCap(selected);
+    const absorbed = absorbCursesAlongPath(
+      board,
+      full,
+      actors[selected].curseStacks,
+      cap,
+    );
+    const drop = new Set([
+      pending.card.instanceId,
+      ...result.discardedBottleIds,
+    ]);
+    const moved: Actors = {
+      ...actors,
+      [selected]: {
+        ...actors[selected],
         hex: result.actorPosition,
         hasMovedThisTurn: true,
-        hand: a.hand.filter((c) => !drop.has(c.instanceId)),
+        curseStacks: absorbed.curseStacks,
+        hand: actors[selected].hand.filter((c) => !drop.has(c.instanceId)),
         actionsLeft: lookupCountsTowardAction(selected, 'turbulence')
-          ? Math.max(0, a.actionsLeft - 1)
-          : a.actionsLeft,
-      };
-    });
+          ? Math.max(0, actors[selected].actionsLeft - 1)
+          : actors[selected].actionsLeft,
+      },
+    };
+    const curseLeave = applyCurseFullIfNeeded(
+      absorbed.board,
+      moved,
+      selected,
+      absorbed.absorbedHexes.length,
+    );
+    applyBoardAndEnclosure(
+      curseLeave.board,
+      curseLeave.actors,
+      [],
+      curseLeave.ageKeys,
+    );
     setPendingPlay(null);
+    const curseNote =
+      absorbed.absorbedHexes.length > 0
+        ? ` · 吸咒×${absorbed.absorbedHexes.length}→層${absorbed.curseStacks}`
+        : '';
     pushLog(
       `【大亂流】→ (${result.actorPosition.q},${result.actorPosition.r})` +
-        ` steps=${result.steps}` +
+        ` steps=${result.steps}${curseNote}` +
         ` / events=${formatEvents(result.events)}`,
     );
     setToast(`大亂流：落到 (${result.actorPosition.q},${result.actorPosition.r})`);
@@ -1305,7 +1829,7 @@ export function App() {
       from,
       direction,
       amplified: usedAmp,
-      actors: CLASS_ORDER.map((id) => ({
+      actors: CLASS_ORDER.filter((id) => !actors[id].eliminated).map((id) => ({
         id,
         hex: actors[id].hex,
       })),
@@ -1315,15 +1839,18 @@ export function App() {
       setToast(`御風失敗：${result.reason}`);
       return;
     }
-    setBoard(result.board);
-    updateActor(selected, (a) => ({
-      ...a,
-      amplifiedPending: false,
-      hand: a.hand.filter((c) => c.instanceId !== card.instanceId),
-      actionsLeft: lookupCountsTowardAction(selected, 'wind')
-        ? Math.max(0, a.actionsLeft - 1)
-        : a.actionsLeft,
-    }));
+    const nextActors: Actors = {
+      ...actors,
+      [selected]: {
+        ...actors[selected],
+        amplifiedPending: false,
+        hand: actors[selected].hand.filter((c) => c.instanceId !== card.instanceId),
+        actionsLeft: lookupCountsTowardAction(selected, 'wind')
+          ? Math.max(0, actors[selected].actionsLeft - 1)
+          : actors[selected].actionsLeft,
+      },
+    };
+    applyBoardAndEnclosure(result.board, nextActors);
     setPendingPlay(null);
     pushLog(
       `【御風術】(${from.q},${from.r}) → (${result.finalHex?.q},${result.finalHex?.r})` +
@@ -1344,10 +1871,18 @@ export function App() {
       setToast('請點直線上的格（或鄰格）');
       return;
     }
+    const others = CLASS_ORDER.filter(
+      (id) => id !== selected && !actors[id].eliminated,
+    ).map((id) => ({
+      id,
+      hex: actors[id].hex,
+    }));
     const final = resolveHeroicCharge({
       board,
       actorPosition: unitHex,
       direction: dir,
+      bounds: { radius: mapRadius },
+      units: others,
     });
     if (!final.ok) {
       pushLog(`【英勇衝鋒】失敗：${final.reason}`);
@@ -1356,25 +1891,61 @@ export function App() {
       if (final.forceEndTurn) endTurn('英勇衝鋒失敗強制結束', { force: true });
       return;
     }
-    setBoard(final.board);
-    updateActor(selected, (a) => ({
-      ...a,
-      hex: final.actorPosition,
-      hasMovedThisTurn: true,
-      hand: a.hand.filter((c) => c.instanceId !== card.instanceId),
-      actionsLeft: lookupCountsTowardAction(selected, 'heroic_charge')
-        ? Math.max(0, a.actionsLeft - 1)
-        : a.actionsLeft,
-    }));
+    const absorbedCount = final.events.filter(
+      (e) => e.type === 'CurseAbsorbed',
+    ).length;
+    const cap = curseCarryCap(selected);
+    const nextStacks = Math.min(
+      cap,
+      actors[selected].curseStacks + absorbedCount,
+    );
+    const charged: Actors = {
+      ...actors,
+      [selected]: {
+        ...actors[selected],
+        hex: final.actorPosition,
+        hasMovedThisTurn: true,
+        endedThisRound: true,
+        moveLocked: false,
+        curseStacks: nextStacks,
+        hand: actors[selected].hand.filter((c) => c.instanceId !== card.instanceId),
+        actionsLeft: lookupCountsTowardAction(selected, 'heroic_charge')
+          ? Math.max(0, actors[selected].actionsLeft - 1)
+          : actors[selected].actionsLeft,
+      },
+    };
+    const curseLeave = applyCurseFullIfNeeded(
+      final.board,
+      charged,
+      selected,
+      absorbedCount,
+    );
     setPendingPlay(null);
-    noteBossDamage(final.bossDamage);
+    setEndConfirmFor(null);
+    if (final.bossDamage > 0) {
+      noteBossDamage(
+        final.bossDamage,
+        curseLeave.board,
+        [],
+        curseLeave.actors,
+        curseLeave.ageKeys,
+      );
+    } else {
+      applyBoardAndEnclosure(
+        curseLeave.board,
+        curseLeave.actors,
+        [],
+        curseLeave.ageKeys,
+        { damaged: bossDamagedThisRound },
+      );
+    }
     pushLog(
       `【英勇衝鋒】→ (${final.actorPosition.q},${final.actorPosition.r})` +
+        ` 強制結束` +
         ` bossDamage=${final.bossDamage}` +
         ` / events=${formatEvents(final.events)}`,
     );
-    setToast(`衝鋒至 (${final.actorPosition.q},${final.actorPosition.r})`);
-    if (final.forceEndTurn) endTurn('英勇衝鋒強制結束', { force: true });
+    setToast(`衝鋒至 (${final.actorPosition.q},${final.actorPosition.r})，回合結束`);
   }
 
   function completeUndying(hex: Axial, card: HandCard) {
@@ -1390,12 +1961,15 @@ export function App() {
       setToast(`不死失敗：${result.reason}`);
       return;
     }
-    setBoard(result.board);
-    updateActor(selected, (a) => ({
-      ...a,
-      hex: result.actorPosition!,
-      hand: a.hand.filter((c) => c.instanceId !== card.instanceId),
-    }));
+    const nextActors: Actors = {
+      ...actors,
+      [selected]: {
+        ...actors[selected],
+        hex: result.actorPosition!,
+        hand: actors[selected].hand.filter((c) => c.instanceId !== card.instanceId),
+      },
+    };
+    applyBoardAndEnclosure(result.board, nextActors);
     setIsDead(false);
     setPendingPlay(null);
     pushLog(
@@ -1419,14 +1993,26 @@ export function App() {
       attacker: unitHex,
       target: hex,
     });
-    if (result.board !== board) setBoard(result.board);
-    updateActor(selected, (a) => ({
-      ...a,
-      hand: a.hand.filter((c) => c.instanceId !== card.instanceId),
-      actionsLeft: counts ? Math.max(0, a.actionsLeft - 1) : a.actionsLeft,
-    }));
+    const nextActors: Actors = {
+      ...actors,
+      [selected]: {
+        ...actors[selected],
+        hand: actors[selected].hand.filter((c) => c.instanceId !== card.instanceId),
+        actionsLeft: counts
+          ? Math.max(0, actors[selected].actionsLeft - 1)
+          : actors[selected].actionsLeft,
+      },
+    };
+    if (result.ok) {
+      applyBoardAndEnclosure(result.board, nextActors);
+    } else {
+      setActors(nextActors);
+    }
     setPendingPlay(null);
-    if (result.ok) noteBossDamage(result.bossDamage);
+    if (result.ok) {
+      const cleared = equals(hex, BOSS_HEX) ? [] : [hex];
+      noteBossDamage(result.bossDamage, result.board, cleared, nextActors);
+    }
     const tgtDesc = equals(hex, BOSS_HEX) ? '王' : `牆(${hex.q},${hex.r})`;
     pushLog(
       `【攻擊】→ ${tgtDesc} bossDamage=${result.bossDamage}` +
@@ -1440,7 +2026,9 @@ export function App() {
   }
 
   function completeDevotion(hex: Axial, card: HandCard) {
-    const targetId = CLASS_ORDER.find((id) => equals(actors[id].hex, hex));
+    const targetId = CLASS_ORDER.find(
+      (id) => !actors[id].eliminated && equals(actors[id].hex, hex),
+    );
     if (!targetId || targetId === selected) {
       pushLog('【奉獻】請點其他職業棋子格');
       setToast('請點友軍格');
@@ -1450,7 +2038,7 @@ export function App() {
       actorHex: unitHex,
       allyHex: hex,
       selfCurseStacks: curseStacks,
-      allyCurseStacks,
+      allyCurseStacks: actors[targetId].curseStacks,
     });
     if (!result.ok) {
       pushLog(`【奉獻】失敗：${result.reason}`);
@@ -1458,16 +2046,31 @@ export function App() {
       setPendingPlay(null);
       return;
     }
-    updateActor(selected, (a) => ({
-      ...a,
-      curseStacks: result.selfCurseStacks,
-      hand: a.hand.filter((c) => c.instanceId !== card.instanceId),
-    }));
-    updateActor(targetId, (a) => ({
-      ...a,
-      curseStacks: result.allyCurseStacks,
-    }));
-    setAllyCurseStacks(result.allyCurseStacks);
+    const absorbedCount = Math.max(0, result.selfCurseStacks - curseStacks);
+    const updated: Actors = {
+      ...actors,
+      [selected]: {
+        ...actors[selected],
+        curseStacks: result.selfCurseStacks,
+        hand: actors[selected].hand.filter((c) => c.instanceId !== card.instanceId),
+      },
+      [targetId]: {
+        ...actors[targetId],
+        curseStacks: result.allyCurseStacks,
+      },
+    };
+    const curseLeave = applyCurseFullIfNeeded(
+      board,
+      updated,
+      selected,
+      absorbedCount,
+    );
+    applyBoardAndEnclosure(
+      curseLeave.board,
+      curseLeave.actors,
+      [],
+      curseLeave.ageKeys,
+    );
     setPendingPlay(null);
     pushLog(
       `【奉獻】自己咒 ${result.selfCurseStacks}／友 ${result.allyCurseStacks}` +
@@ -1519,10 +2122,14 @@ export function App() {
   }
 
   function onPlay(card: HandCard) {
-    const attacker = unitHex;
+    const meNow = actorsRef.current[selected];
+    const attacker = meNow.hex;
     const counts = lookupCountsTowardAction(selected, card.cardId);
     const bonusShot =
-      card.cardId === 'shot' && mayPlayShotIgnoreRange === true;
+      card.cardId === 'shot' && meNow.mayPlayShotIgnoreRange === true;
+    const actionsNow = meNow.actionsLeft;
+    const ammoNow = meNow.ammo;
+    const handNow = meNow.hand;
 
     if (won) {
       pushLog(`【${card.name}】已勝利，停止出牌`);
@@ -1534,9 +2141,24 @@ export function App() {
       setToast('已敗北');
       return;
     }
-    if (me.endedThisRound) {
+    if (meNow.eliminated) {
+      pushLog(`【${card.name}】已出局，無法出牌`);
+      setToast('已出局');
+      return;
+    }
+    if (meNow.sealed) {
+      pushLog(`【${card.name}】已封印，無法出牌`);
+      setToast('已封印，無法出牌');
+      return;
+    }
+    if (meNow.endedThisRound) {
       pushLog(`【${card.name}】本輪已結束（唯讀）`);
       setToast('本輪已結束（唯讀）');
+      return;
+    }
+    if (card.silenced === true && isAdjacentToSilence(board, meNow.hex)) {
+      pushLog(`【${card.name}】鄰近沉默，無法打出（受沉默）`);
+      setToast('鄰近沉默：無法打出此牌');
       return;
     }
     if (pendingPlay) {
@@ -1550,7 +2172,7 @@ export function App() {
       setToast(msg);
       return;
     }
-    if (counts && actionsLeft <= 0 && !bonusShot) {
+    if (counts && actionsNow <= 0 && !bonusShot) {
       const msg = '本回合行動已用完';
       pushLog(`【${card.name}】→ ${msg}`);
       setToast(msg);
@@ -1560,30 +2182,53 @@ export function App() {
     if (card.cardId === 'shot') {
       const result = resolveGunnerShot({
         attacker,
-        ammo,
+        ammo: ammoNow,
         ignoreRangePenalty: bonusShot,
       });
-      updateActor(selected, (a) => ({
-        ...a,
+      const spent: ClassActor = {
+        ...meNow,
         ammo: result.ammo,
-        mayPlayShotIgnoreRange: bonusShot ? false : a.mayPlayShotIgnoreRange,
-        hand: a.hand.filter((c) => c.instanceId !== card.instanceId),
+        mayPlayShotIgnoreRange: bonusShot ? false : meNow.mayPlayShotIgnoreRange,
+        hand: meNow.hand.filter((c) => c.instanceId !== card.instanceId),
         actionsLeft:
           bonusShot || !counts
-            ? a.actionsLeft
-            : Math.max(0, a.actionsLeft - 1),
-      }));
-      noteBossDamage(result.bossDamage);
+            ? meNow.actionsLeft
+            : Math.max(0, meNow.actionsLeft - 1),
+      };
+      const pulled = drawFromDeck(selected, spent, result.drawFromAmmo);
+      commitActors({ ...actorsRef.current, [selected]: pulled.actor });
+      const drawnNames = pulled.drawn
+        .filter((c) =>
+          pulled.actor.hand.some((h) => h.instanceId === c.instanceId),
+        )
+        .map((c) => c.name);
+      if (pulled.discarded.length > 0) {
+        pushLog(
+          `【手牌上限】槍手 棄最新 ${pulled.discarded.map((c) => c.name).join('、')}`,
+        );
+      }
+      noteBossDamage(result.bossDamage, board, [], {
+        ...actorsRef.current,
+        [selected]: pulled.actor,
+      });
       pushLog(
         `【射擊】attacker=(${attacker.q},${attacker.r}) → bossDamage=${result.bossDamage}` +
+          (result.drawFromAmmo > 0
+            ? ` · 裝填抽 ${drawnNames.join('、') || '0'}（要 ${result.drawFromAmmo}）`
+            : '') +
+          (pulled.short ? ' · 牌庫不夠' : '') +
           ` / events=${formatEvents(result.events)}`,
       );
-      setToast(`射擊：王傷 ${result.bossDamage}`);
+      setToast(
+        result.drawFromAmmo > 0
+          ? `射擊：王傷 ${result.bossDamage}，抽 ${drawnNames.length}`
+          : `射擊：王傷 ${result.bossDamage}`,
+      );
       return;
     }
 
     if (card.cardId === 'playful_bottle' || card.cardId === 'mischief_bottle') {
-      const input = { ammo, hand: toGunnerInstances(hand) };
+      const input = { ammo: ammoNow, hand: toGunnerInstances(handNow) };
       const result =
         card.cardId === 'playful_bottle'
           ? resolvePlayfulBottle(input)
@@ -1598,16 +2243,18 @@ export function App() {
         const drop = new Set(
           [card.instanceId, result.discardedShotId ?? ''].filter(Boolean),
         );
+        const spend = lookupCountsTowardAction(selected, card.cardId);
         return {
           ...a,
           ammo: result.ammo,
           hand: a.hand.filter((c) => !drop.has(c.instanceId)),
+          actionsLeft: spend ? Math.max(0, a.actionsLeft - 1) : a.actionsLeft,
         };
       });
       pushLog(
-        `【${card.name}】OK → 裝填 dmg+${result.ammo.damageBonus} draw+${result.ammo.drawBonus}`,
+        `【${card.name}】OK → 裝填 dmg+${result.ammo.damageBonus} draw+${result.ammo.drawBonus}（計次）`,
       );
-      setToast(`${card.name}：裝填（不計次）`);
+      setToast(`${card.name}：裝填（計次）`);
       return;
     }
 
@@ -1631,20 +2278,25 @@ export function App() {
       const result = resolvePowerUp({
         mode: 'temp_shot',
         attacker,
-        ammo,
+        ammo: ammoNow,
       });
       if (!result.ok) {
         pushLog(`【Power UP!!】失敗：${result.reason}`);
         setToast(`Power UP 失敗：${result.reason}`);
         return;
       }
-      updateActor(selected, (a) => ({
-        ...a,
-        ammo: result.ammo ?? a.ammo,
-        hand: a.hand.filter((c) => c.instanceId !== card.instanceId),
-        actionsLeft: counts ? Math.max(0, a.actionsLeft - 1) : a.actionsLeft,
-      }));
-      noteBossDamage(result.bossDamage ?? 0);
+      const spent: ClassActor = {
+        ...meNow,
+        ammo: result.ammo ?? meNow.ammo,
+        hand: meNow.hand.filter((c) => c.instanceId !== card.instanceId),
+        actionsLeft: counts ? Math.max(0, meNow.actionsLeft - 1) : meNow.actionsLeft,
+      };
+      const pulled = drawFromDeck(selected, spent, result.drawFromAmmo ?? 0);
+      commitActors({ ...actorsRef.current, [selected]: pulled.actor });
+      noteBossDamage(result.bossDamage ?? 0, board, [], {
+        ...actorsRef.current,
+        [selected]: pulled.actor,
+      });
       pushLog(`【Power UP!!】temp_shot → bossDamage=${result.bossDamage}`);
       setToast(`Power UP 臨時射擊：王傷 ${result.bossDamage ?? 0}`);
       return;
@@ -1690,18 +2342,22 @@ export function App() {
     }
 
     if (card.cardId === 'magic_arrow') {
-      const usedAmp = amplifiedPending;
+      const usedAmp = meNow.amplifiedPending;
       const result = resolveMagicArrow({
         attacker,
         amplified: usedAmp,
       });
-      updateActor(selected, (a) => ({
-        ...a,
+      const spent: ClassActor = {
+        ...meNow,
         amplifiedPending: false,
-        hand: a.hand.filter((c) => c.instanceId !== card.instanceId),
-        actionsLeft: counts ? Math.max(0, a.actionsLeft - 1) : a.actionsLeft,
-      }));
-      noteBossDamage(result.bossDamage);
+        hand: meNow.hand.filter((c) => c.instanceId !== card.instanceId),
+        actionsLeft: counts
+          ? Math.max(0, meNow.actionsLeft - 1)
+          : meNow.actionsLeft,
+      };
+      const nextActors: Actors = { ...actorsRef.current, [selected]: spent };
+      commitActors(nextActors);
+      noteBossDamage(result.bossDamage, board, [], nextActors);
       pushLog(
         `【魔法箭】→ bossDamage=${result.bossDamage}` +
           (usedAmp ? '（增幅）' : ''),
@@ -1720,18 +2376,39 @@ export function App() {
     if (card.cardId === 'focus') {
       const usedAmp = amplifiedPending;
       const result = resolveFocus({ amplified: usedAmp });
-      updateActor(selected, (a) => ({
-        ...a,
+      const spent: ClassActor = {
+        ...actors[selected],
         amplifiedPending: false,
-        hand: a.hand.filter((c) => c.instanceId !== card.instanceId),
-      }));
+        hand: actors[selected].hand.filter(
+          (c) => c.instanceId !== card.instanceId,
+        ),
+      };
+      const pulled = drawFromDeck(selected, spent, result.drawCount);
+      const nextActors: Actors = { ...actors, [selected]: pulled.actor };
+      const drawnNames = pulled.drawn
+        .filter((c) =>
+          pulled.actor.hand.some((h) => h.instanceId === c.instanceId),
+        )
+        .map((c) => c.name);
+      if (pulled.discarded.length > 0) {
+        pushLog(
+          `【手牌上限】${classLabel(selected)} 棄最新 ${pulled.discarded.map((c) => c.name).join('、')}`,
+        );
+      }
       pushLog(
-        `【聚精會神】應抽 ${result.drawCount}` +
-          (usedAmp ? '（增幅）' : '') +
+        `【聚精會神】抽 ${drawnNames.join('、') || '0'}` +
+          `（要 ${result.drawCount}${usedAmp ? '／增幅' : ''}）` +
+          (pulled.short ? ' · 牌庫不夠' : '') +
           ` endTurn=${result.endTurn}`,
       );
-      setToast(`聚精：應抽 ${result.drawCount}（強制結束）`);
-      if (result.endTurn) endTurn('聚精會神強制結束', { force: true });
+      setToast(
+        `聚精：抽 ${drawnNames.length}/${result.drawCount}（強制結束）`,
+      );
+      if (result.endTurn) {
+        endTurn('聚精會神強制結束', { force: true, actorsNow: nextActors });
+      } else {
+        setActors(nextActors);
+      }
       return;
     }
 
@@ -1765,6 +2442,11 @@ export function App() {
     }
 
     if (card.cardId === 'planar_swap') {
+      if (actors[allyId].eliminated) {
+        pushLog('【位面調換】失敗：無存活友軍');
+        setToast('位面失敗：無存活友軍');
+        return;
+      }
       const usedAmp = amplifiedPending;
       const result = resolvePlanarSwap({
         board,
@@ -1800,7 +2482,7 @@ export function App() {
     if (card.cardId === 'attack') {
       const targets = listKnightAttackTargets(board, attacker, actors, selected);
       if (targets.length === 0) {
-        const msg = '需鄰王，或鄰格有可拆牆（不可選友軍／沉默／詛咒／懲罰）';
+        const msg = '需鄰王，或鄰格有可拆牆（不能打其他職業／沉默／詛咒／懲罰）';
         pushLog(`【攻擊】失敗：${msg}`);
         setToast(`攻擊失敗：${msg}`);
         return;
@@ -1888,7 +2570,7 @@ export function App() {
       <header>
         <h1>薄 UI（三職業平衡試玩）</h1>
         <p className="muted">
-          三人同場；傷王即鋪牆；全員結束回合才進下一輪。重製可選出生點。
+          必須重製開局。出局離場；吸咒滿層出局。越打越擠是主軸。
         </p>
       </header>
 
@@ -1906,7 +2588,9 @@ export function App() {
                 }))
               : boardActors
           }
-          selectedHex={phase === 'playing' ? unitHex : undefined}
+          selectedHex={
+            phase === 'playing' && !me.eliminated ? unitHex : undefined
+          }
           hoverPath={hoverPath}
           targetHexes={attackTargets}
           onHexClick={onHexClick}
@@ -1924,8 +2608,13 @@ export function App() {
             {log.length === 0 ? (
               <li className="empty">尚無紀錄</li>
             ) : (
-              log.map((line, i) => (
-                <li key={`${i}-${line.slice(0, 24)}`}>{line}</li>
+              [...log].reverse().map((line, i) => (
+                <li
+                  key={`${log.length - 1 - i}-${line.slice(0, 24)}`}
+                  className={i === 0 ? 'newest' : undefined}
+                >
+                  {line}
+                </li>
               ))
             )}
           </ul>
@@ -1954,7 +2643,8 @@ export function App() {
           {' · '}輪 {roundIndex}
           {won ? ' · 勝利' : ''}
           {lost ? ' · 敗北' : ''}
-          {' · '}移動 {movesLeft}/{TURN_MOVES_PER_ROUND}
+          {' · '}移動 {movesLeft}/
+          {basicMoveCap(board, unitHex, TURN_MOVES_PER_ROUND)}
           {' · '}行動 {actionsLeft}/{TURN_ACTIONS_PER_ROUND}
           {moveLocked ? ' · 移動鎖定' : ''}
           {hasMovedThisTurn ? ' · 已移動' : ''}
@@ -1964,7 +2654,12 @@ export function App() {
           {selected === 'gunner' ? ` · ${ammoHint}` : ''}
           {selected === 'mage' && amplifiedPending ? ' · 增幅待用' : ''}
           {selected === 'mage' && barrierAura ? ' · 屏障中' : ''}
-          {selected === 'knight' ? ` · 咒${curseStacks}` : ''}
+          {` · 手牌 ${hand.length}/${HAND_CAP[selected]}`}
+          {` · 牌庫 ${me.deck.length}`}
+          {curseStacks > 0 ? ` · 咒${curseStacks}` : ''}
+          {isAdjacentToSilence(board, unitHex) ? ' · 鄰沉默' : ''}
+          {me.sealed ? ' · 封' : ''}
+          {me.eliminated ? ' · 出局' : ''}
           {tauntRestriction ? ' · 嘲諷中' : ''}
           {pendingPlay ? ` · 指定:${pendingPlay.kind}` : ''}
           {lastDraw ? ` · 上次抽 ${lastDraw}` : ''}
@@ -2014,8 +2709,7 @@ export function App() {
         </div>
       ) : null}
 
-      <div className="hand-row">
-        <div className="class-picks" role="group" aria-label="職業">
+      <div className="class-picks" role="group" aria-label="職業">
           {CLASS_ORDER.map((id) => (
             <button
               key={id}
@@ -2023,7 +2717,9 @@ export function App() {
               className={
                 'card-btn' +
                 (id === selected ? ' selected' : '') +
-                (actors[id].endedThisRound ? ' ended' : '')
+                (actors[id].endedThisRound || actors[id].eliminated
+                  ? ' ended'
+                  : '')
               }
               onClick={() => selectClass(id)}
               disabled={phase !== 'playing'}
@@ -2031,17 +2727,29 @@ export function App() {
               <span className="name">{classLabel(id)}</span>
               <span className="meta">
                 ({actors[id].hex.q},{actors[id].hex.r})
-                {actors[id].endedThisRound ? ' · 已結束' : ' · 可行動'}
+                {actors[id].eliminated
+                  ? ' · 出局'
+                  : actors[id].endedThisRound
+                    ? ' · 已結束'
+                    : ' · 可行動'}
+                {actors[id].curseStacks >= 1 ? ' · 咒' : ''}
+                {isAdjacentToSilence(board, actors[id].hex)
+                  ? ' · 鄰沉默'
+                  : ''}
+                {actors[id].sealed && !actors[id].eliminated ? ' · 封' : ''}
               </span>
             </button>
           ))}
-        </div>
-        <Hand
-          cards={hand}
-          onPlay={onPlay}
-          onCardHover={setHoveredCard}
-        />
       </div>
+      <Hand
+        cards={hand}
+        onPlay={onPlay}
+        onCardHover={setHoveredCard}
+        adjacentSilence={isAdjacentToSilence(board, unitHex)}
+        actionsLeft={actionsLeft}
+        mayBonusShot={mayPlayShotIgnoreRange}
+        sealed={me.sealed}
+      />
 
       <div className="toast" role="status">
         {toast}
@@ -2053,7 +2761,7 @@ export function App() {
             <h2>重製對局設定</h2>
             <div className="reset-form">
               <label>
-                地圖半徑
+                <span className="reset-label-text">地圖半徑</span>
                 <input
                   type="number"
                   min={3}
@@ -2068,7 +2776,7 @@ export function App() {
                 />
               </label>
               <label>
-                王 HP
+                <span className="reset-label-text">王 HP</span>
                 <input
                   type="number"
                   min={1}
@@ -2082,8 +2790,84 @@ export function App() {
                   }
                 />
               </label>
-              <label>
-                手卡張數
+              <fieldset>
+                <legend>職業小技 +1（每職可選 0–2）</legend>
+                <p className="reset-prio-hint">
+                  預設 15 張（6 基礎＋4 小技×2＋1 大招）。勾選的小技再 +1 張。
+                </p>
+                {CLASS_ORDER.map((id) => {
+                  const picked = resetDraft.extraSmallIds[id] ?? [];
+                  return (
+                    <div key={id} className="reset-skill-block">
+                      <p className="reset-prio-hint">
+                        {classLabel(id)}（{picked.length}/2）
+                      </p>
+                      {SMALL_SKILLS[id].map((sid) => {
+                        const on = picked.includes(sid);
+                        return (
+                          <label key={sid} className="reset-check">
+                            <input
+                              type="checkbox"
+                              checked={on}
+                              disabled={!on && picked.length >= 2}
+                              onChange={() => {
+                                setResetDraft((d) => {
+                                  const cur = d.extraSmallIds[id] ?? [];
+                                  const next = cur.includes(sid)
+                                    ? cur.filter((x) => x !== sid)
+                                    : cur.length >= 2
+                                      ? cur
+                                      : [...cur, sid];
+                                  return {
+                                    ...d,
+                                    extraSmallIds: {
+                                      ...d.extraSmallIds,
+                                      [id]: next,
+                                    },
+                                  };
+                                });
+                              }}
+                            />{' '}
+                            {defFor(id, sid).name}
+                          </label>
+                        );
+                      })}
+                    </div>
+                  );
+                })}
+              </fieldset>
+              <fieldset className="reset-diff-list">
+                <legend>難度</legend>
+                <p className="reset-prio-hint">可疊加，確認時重算袋與放置。</p>
+                {LIVE_DIFFICULTIES.map((d) => (
+                  <label key={d.key} className="reset-check">
+                    <input
+                      type="checkbox"
+                      checked={resetDraft.difficulty[d.key]}
+                      onChange={(e) => {
+                        const on = e.target.checked;
+                        setResetDraft((prev) =>
+                          applyDifficultyToSetup({
+                            ...prev,
+                            difficulty: { ...prev.difficulty, [d.key]: on },
+                          }),
+                        );
+                      }}
+                    />
+                    <span className="reset-diff-title">{d.label}</span>
+                    <span className="reset-diff-hint">{d.hint}</span>
+                  </label>
+                ))}
+                <label className="reset-check reset-disabled-opt">
+                  <input type="checkbox" disabled />
+                  <span className="reset-diff-title">代價移動</span>
+                  <span className="reset-diff-hint">
+                    基礎移動 1，翻牌換步（尚未實作）
+                  </span>
+                </label>
+              </fieldset>
+              <label className="reset-boss-deck">
+                <span className="reset-label-text">手卡張數</span>
                 <input
                   type="number"
                   min={1}
@@ -2099,6 +2883,7 @@ export function App() {
               </label>
               <fieldset>
                 <legend>放置張數（合計＝手卡）</legend>
+                <div className="reset-place-grid">
                 <label>
                   2 格
                   <input
@@ -2141,77 +2926,108 @@ export function App() {
                     }
                   />
                 </label>
+                </div>
               </fieldset>
               <fieldset>
-                <legend>地形袋（合計＝手卡）</legend>
-                <label>
-                  老化牆體
-                  <input
-                    type="number"
-                    min={0}
-                    value={resetDraft.agedWalls}
-                    onChange={(e) =>
-                      setResetDraft((d) => ({
-                        ...d,
-                        agedWalls: Number(e.target.value),
-                      }))
-                    }
-                  />
+                <legend>地形袋（合計＝可鋪格）</legend>
+                <p className="reset-prio-hint">
+                  可鋪 {resetDraft.place2 * 2 + resetDraft.place3 * 3 + resetDraft.place4 * 4}
+                  格（2×{resetDraft.place2}＋3×{resetDraft.place3}＋4×{resetDraft.place4}）。袋會洗，鋪哪格才看威脅。
+                </p>
+                <label className="reset-kind-row">
+                  <span className="reset-kind-name">老化</span>
+                  <span className="reset-kind-inputs">
+                    <input
+                      type="number"
+                      min={0}
+                      value={resetDraft.agedWalls}
+                      onChange={(e) =>
+                        setResetDraft((d) => ({
+                          ...d,
+                          agedWalls: Number(e.target.value),
+                        }))
+                      }
+                    />
+                  </span>
                 </label>
-                <label>
-                  完整牆體
-                  <input
-                    type="number"
-                    min={0}
-                    value={resetDraft.intactWalls}
-                    onChange={(e) =>
-                      setResetDraft((d) => ({
-                        ...d,
-                        intactWalls: Number(e.target.value),
-                      }))
-                    }
-                  />
+                <label className="reset-kind-row">
+                  <span className="reset-kind-name">一般格</span>
+                  <span className="reset-kind-inputs">
+                    <input
+                      type="number"
+                      min={0}
+                      value={resetDraft.intactWalls}
+                      onChange={(e) =>
+                        setResetDraft((d) => ({
+                          ...d,
+                          intactWalls: Number(e.target.value),
+                        }))
+                      }
+                    />
+                  </span>
                 </label>
-                <label>
-                  詛咒
-                  <input
-                    type="number"
-                    min={0}
-                    value={resetDraft.curseTiles}
-                    onChange={(e) =>
-                      setResetDraft((d) => ({
-                        ...d,
-                        curseTiles: Number(e.target.value),
-                      }))
-                    }
-                  />
+                <label className="reset-kind-row">
+                  <span className="reset-kind-name">詛咒</span>
+                  <span className="reset-kind-inputs">
+                    <input
+                      type="number"
+                      min={0}
+                      value={resetDraft.curseTiles}
+                      onChange={(e) =>
+                        setResetDraft((d) => ({
+                          ...d,
+                          curseTiles: Number(e.target.value),
+                        }))
+                      }
+                    />
+                  </span>
                 </label>
-                <label>
-                  沉默
-                  <input
-                    type="number"
-                    min={0}
-                    value={resetDraft.silenceTiles}
-                    onChange={(e) =>
-                      setResetDraft((d) => ({
-                        ...d,
-                        silenceTiles: Number(e.target.value),
-                      }))
-                    }
-                  />
+                <label className="reset-kind-row">
+                  <span className="reset-kind-name">沉默</span>
+                  <span className="reset-kind-inputs">
+                    <input
+                      type="number"
+                      min={0}
+                      value={resetDraft.silenceTiles}
+                      onChange={(e) =>
+                        setResetDraft((d) => ({
+                          ...d,
+                          silenceTiles: Number(e.target.value),
+                        }))
+                      }
+                    />
+                  </span>
+                </label>
+                <label className="reset-kind-row">
+                  <span className="reset-kind-name">泥濘格</span>
+                  <span className="reset-kind-inputs">
+                    <input
+                      type="number"
+                      min={0}
+                      value={resetDraft.mudTiles}
+                      onChange={(e) =>
+                        setResetDraft((d) => ({
+                          ...d,
+                          mudTiles: Number(e.target.value),
+                        }))
+                      }
+                    />
+                  </span>
                 </label>
               </fieldset>
             </div>
             <div className="reset-actions">
-              <button
-                type="button"
-                onClick={() => {
-                  setPhase('playing');
-                  setToast('已取消重製');
-                }}
-              >
-                取消
-              </button>
+              {hasStarted ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPhase('playing');
+                    setToast('已取消重製');
+                  }}
+                >
+                  取消
+                </button>
+              ) : null}
               <button
                 type="button"
                 className="primary"

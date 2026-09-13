@@ -49,7 +49,7 @@ export function defaultIsAgeable(board: Board, hexKey: string): boolean {
   if (tile.aged === true) return false;
   // plain_starter 亦不老化（表定）；若呼叫端誤登錄，此處擋下
   if (tile.kind === 'plain_starter') return false;
-  // 僅 plain 系進入老化；punish／curse／silence 不老化
+  // 僅 plain 系進入老化；punish／curse／silence／mud 不老化
   return tile.kind === 'plain' || tile.kind === 'plain_broken';
 }
 

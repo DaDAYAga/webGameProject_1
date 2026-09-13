@@ -260,21 +260,41 @@ describe('英勇衝鋒 intact wall / unit / empty', () => {
     expect(r.forceEndTurn).toBe(true);
   });
 
-  it('hit unit → landingHex beside unit', () => {
+  it('mud: stop on previous hex like silence', () => {
+    let board = createEmptyBoard();
+    const start: Axial = { q: 2, r: 0 };
+    const mudHex: Axial = { q: 4, r: 0 };
+    board = placeTerrain(board, mudHex, 'mud');
+    const r = resolveHeroicCharge({
+      board,
+      actorPosition: start,
+      direction: DIR_EQ,
+      bounds: BOUNDS,
+    });
+    expect(r.ok).toBe(true);
+    expect(r.actorPosition).toEqual({ q: 3, r: 0 });
+    expect(r.forceEndTurn).toBe(true);
+    expect(getTile(r.board, mudHex)?.kind).toBe('mud');
+    expect(r.events).toContainEqual({
+      type: 'ChargeBlocked',
+      hex: mudHex,
+      reason: 'mud',
+    });
+  });
+
+  it('hit unit → stop on previous hex, no fail', () => {
     const board = createEmptyBoard();
     const start: Axial = { q: 2, r: 0 };
     const unitHex: Axial = { q: 4, r: 0 };
-    const landing: Axial = { q: 4, r: -1 }; // neighbor of unit
     const r = resolveHeroicCharge({
       board,
       actorPosition: start,
       direction: DIR_EQ,
       bounds: BOUNDS,
       units: [{ id: 'ally', hex: unitHex }],
-      landingHex: landing,
     });
     expect(r.ok).toBe(true);
-    expect(r.actorPosition).toEqual(landing);
+    expect(r.actorPosition).toEqual({ q: 3, r: 0 });
     expect(r.forceEndTurn).toBe(true);
     expect(r.events).toContainEqual({
       type: 'ChargeBlocked',

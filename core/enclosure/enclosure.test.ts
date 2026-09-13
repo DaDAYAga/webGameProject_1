@@ -28,7 +28,7 @@ function wallNeighbors(
   board: Board,
   actor: Axial,
   count: number,
-  kind: 'plain' | 'plain_broken' | 'punish' | 'curse' | 'silence' = 'plain',
+  kind: 'plain' | 'plain_broken' | 'punish' | 'curse' | 'silence' | 'mud' = 'plain',
 ): Board {
   let b = board;
   let placed = 0;
@@ -87,6 +87,7 @@ describe('isEnclosureBlocker', () => {
       'punish',
       'curse',
       'silence',
+      'mud',
     ] as const) {
       board = placeTerrain(createEmptyBoard(), hex, kind);
       expect(isEnclosureBlocker(board, hex, BOUNDS)).toBe(true);

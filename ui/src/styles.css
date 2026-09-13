@@ -13,6 +13,7 @@
 body {
   margin: 0;
   min-height: 100vh;
+  overflow-x: hidden;
 }
 
 #root {
@@ -28,28 +29,28 @@ body {
   gap: 1rem;
 }
 
-/* 棋盤＋日誌並排：日誌高度跟隨棋盤面板，內部捲動 */
+/* 棋盤定高、日誌同高；log 內容超出才出卷軸（不把列撐高） */
 .play-row {
-  display: flex;
-  align-items: stretch;
+  display: grid;
+  grid-template-columns: 1fr 320px;
   gap: 0.85rem;
+  align-items: stretch;
   min-height: 0;
 }
 
 .play-row .board-panel {
-  flex: 1 1 auto;
   min-width: 0;
   display: flex;
   flex-direction: column;
 }
 
 .play-row .log-panel {
-  flex: 0 0 320px;
   display: flex;
   flex-direction: column;
-  min-height: 0;
-  max-height: none;
-  align-self: stretch;
+  height: 0;
+  min-height: 100%;
+  max-height: 100%;
+  overflow: hidden;
 }
 
 .play-row .log {
@@ -57,6 +58,7 @@ body {
   max-height: none;
   min-height: 0;
   overflow-y: auto;
+  overflow-x: hidden;
 }
 
 header h1 {
@@ -79,19 +81,11 @@ header h1 {
   font-size: 0.85rem;
 }
 
-/* 職業鈕與手牌同一列 */
-.hand-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.75rem;
-  align-items: flex-start;
-}
-
+/* 職業鈕一行、手牌下一行 */
 .class-picks {
   display: flex;
   flex-wrap: wrap;
   gap: 0.6rem;
-  flex: 0 0 auto;
 }
 
 .class-picks .card-btn {
@@ -222,6 +216,11 @@ header h1 {
 
 .log li:last-child {
   border-bottom: none;
+}
+
+.log li.newest {
+  color: #f2f5ff;
+  font-weight: 600;
 }
 
 .log .empty {
@@ -370,7 +369,7 @@ header h1 {
 /* 王牌庫 chip：棋盤右上 */
 .boss-deck-chip {
   position: absolute;
-  top: 2.55rem;
+  top: calc(2.55rem + 8px);
   right: 0.65rem;
   z-index: 5;
   display: flex;
@@ -416,7 +415,7 @@ header h1 {
   display: block;
 }
 
-/* 重製設定表單 */
+/* 重製設定表單：不出現橫向捲軸 */
 .reset-modal-backdrop {
   position: fixed;
   inset: 0;
@@ -425,17 +424,20 @@ header h1 {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 1rem;
+  padding: 0.75rem;
+  overflow-x: hidden;
 }
 
 .reset-modal {
-  width: min(440px, 100%);
+  width: min(26rem, calc(100vw - 1.5rem));
+  max-width: 100%;
   max-height: 90vh;
+  overflow-x: hidden;
   overflow-y: auto;
   border-radius: 12px;
   border: 1px solid #3d4658;
   background: #1a1f2a;
-  padding: 1rem 1.1rem 1.1rem;
+  padding: 1rem 1rem 1.1rem;
   box-shadow: 0 12px 36px rgba(0, 0, 0, 0.5);
 }
 
@@ -448,20 +450,40 @@ header h1 {
   display: flex;
   flex-direction: column;
   gap: 0.55rem;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .reset-form label {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 0.75rem;
+  flex-wrap: nowrap;
+  gap: 0.5rem;
   font-size: 0.88rem;
   color: #c9d4ea;
+  min-width: 0;
+}
+
+.reset-label-text,
+.reset-kind-name {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.reset-form label.reset-boss-deck {
+  margin-top: 40px;
+  margin-bottom: 8px;
+  align-items: center;
+  gap: 8px;
 }
 
 .reset-form input[type='number'] {
-  width: 5.5rem;
-  padding: 0.3rem 0.4rem;
+  width: 4.25rem;
+  max-width: 100%;
+  min-width: 0;
+  flex: 0 0 auto;
+  padding: 0.3rem 0.35rem;
   border-radius: 6px;
   border: 1px solid #3d4658;
   background: #12141a;
@@ -472,13 +494,68 @@ header h1 {
   border: 1px solid #2e3648;
   border-radius: 8px;
   margin: 0.25rem 0 0;
-  padding: 0.55rem 0.65rem 0.7rem;
+  padding: 0.5rem 0.6rem 0.65rem;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .reset-form legend {
   padding: 0 0.35rem;
   color: #9aa3b2;
   font-size: 0.8rem;
+}
+
+.reset-place-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.45rem;
+}
+
+.reset-place-grid label {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.25rem;
+}
+
+.reset-place-grid input[type='number'] {
+  width: 100%;
+}
+
+.reset-kind-head {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin: 0.15rem 0 0.2rem;
+  font-size: 0.7rem;
+  color: #8b93a3;
+}
+
+.reset-kind-head span {
+  width: 60px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.reset-kind-row {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.reset-kind-row .reset-kind-inputs {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+.reset-kind-row input[type='number'] {
+  width: 60px;
+  flex: 0 0 60px;
+  max-width: 60px;
 }
 
 .reset-actions {
@@ -502,4 +579,87 @@ header h1 {
   background: #2c2430;
   color: #f0c9a0;
   font-weight: 600;
+}
+
+.card-btn.silenced-blocked,
+.card-btn:disabled.silenced-blocked {
+  opacity: 0.42;
+  filter: grayscale(0.65);
+  cursor: not-allowed;
+  color: #8b93a3;
+}
+.card-btn.silenced-blocked:hover {
+  border-color: #3d4658;
+  transform: none;
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.35);
+}
+
+.reset-kind-inputs {
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
+  min-width: 0;
+}
+.reset-prio-hint {
+  margin: 0.2rem 0 0.15rem;
+  font-size: 0.75rem;
+  color: #9aa3b2;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.reset-skill-block {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.15rem 0.45rem;
+  margin: 0.4rem 0 0.1rem;
+}
+.reset-skill-block .reset-prio-hint {
+  grid-column: 1 / -1;
+}
+.reset-diff-list label.reset-check + label.reset-check {
+  margin-top: 12px;
+}
+.reset-form label.reset-check {
+  justify-content: flex-start;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.4rem;
+}
+.reset-diff-title {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.reset-diff-hint {
+  flex: 1 1 100%;
+  padding-left: 1.35rem;
+  font-size: 0.75rem;
+  color: #8b93a3;
+  overflow-wrap: anywhere;
+}
+.reset-form input[type='checkbox'] {
+  width: auto;
+  accent-color: #c9b48a;
+}
+.reset-disabled-opt,
+.reset-form .reset-disabled-opt {
+  color: #6b7385;
+  opacity: 0.62;
+  cursor: not-allowed;
+}
+.reset-form .reset-disabled-opt input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.card-btn.action-blocked,
+.card-btn:disabled.action-blocked {
+  opacity: 0.42;
+  filter: grayscale(0.55);
+  cursor: not-allowed;
+}
+.card-btn.action-blocked:hover {
+  border-color: #3d4658;
+  transform: none;
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.35);
 }

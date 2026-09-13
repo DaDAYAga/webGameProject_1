@@ -5,6 +5,16 @@
 
 export type { TerrainKind, Tile, Board, TerrainHitResult } from './types.js';
 export type { OpeningBoardOptions, CanStandAtOptions } from './board.js';
+export {
+  BASIC_MOVE_BASE,
+  curseCarryCap,
+  isAdjacentToSilence,
+  isAdjacentToMud,
+  basicMoveCap,
+  absorbCursesAlongPath,
+  placeUnagedPlainIfEmpty,
+  curseFullAfterAbsorb,
+} from './statusHelpers.js';
 export type {
   ShortestPathOptions,
   StandableShrinkingFanOptions,

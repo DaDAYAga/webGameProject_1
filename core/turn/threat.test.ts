@@ -5,7 +5,11 @@ import {
   placeTerrain,
 } from '../board/index.js';
 import { DEFAULT_MAP_RADIUS } from '../enclosure/index.js';
-import { pickThreatPlacementHexes, type ThreatActor } from './threat.js';
+import {
+  assignKindsByPriority,
+  pickThreatPlacementHexes,
+  type ThreatActor,
+} from './threat.js';
 
 const bounds = { radius: DEFAULT_MAP_RADIUS };
 
@@ -139,4 +143,64 @@ describe('pickThreatPlacementHexes', () => {
       `${picks[1]!.q},${picks[1]!.r}`,
     );
   });
+
+  it('crushHexes：已封印本體可被選且優先於一般空格', () => {
+    const board = createEmptyBoard();
+    const crush = { q: 2, r: 0 };
+    const actors: ThreatActor[] = [
+      { id: 'k', hex: crush, role: 'melee' },
+    ];
+    const picks = pickThreatPlacementHexes(board, actors, 1, {
+      bounds,
+      occupied: [crush],
+      crushHexes: [crush],
+    });
+    expect(picks[0]).toEqual(crush);
+  });
 });
+
+describe('assignKindsByPriority', () => {
+  const priority = {
+    silence: 40,
+    curse: 30,
+    mud: 20,
+    plain: 10,
+    plain_aged: 0,
+  } as const;
+  type Tok = keyof typeof priority;
+
+  it('assigns highest-priority kinds to first (most threatening) picks', () => {
+    const picks = [
+      { q: 1, r: 0 },
+      { q: 2, r: 0 },
+      { q: 3, r: 0 },
+    ];
+    const bag: Tok[] = ['plain', 'silence', 'curse', 'mud'];
+    const { tokens, remaining } = assignKindsByPriority(picks, bag, priority);
+    expect(tokens).toEqual(['silence', 'curse', 'mud']);
+    expect(remaining).toEqual(['plain']);
+  });
+
+  it('is stable: equal priority keeps bag order', () => {
+    const picks = [{ q: 1, r: 0 }, { q: 2, r: 0 }];
+    const bag: Tok[] = ['plain', 'plain_aged', 'plain'];
+    const { tokens, remaining } = assignKindsByPriority(picks, bag, priority);
+    expect(tokens).toEqual(['plain', 'plain']);
+    expect(remaining).toEqual(['plain_aged']);
+  });
+
+  it('n > bag uses whole bag; empty picks leave bag intact', () => {
+    const bag: Tok[] = ['mud', 'curse'];
+    const over = assignKindsByPriority(
+      [{ q: 0, r: 1 }, { q: 0, r: 2 }, { q: 0, r: 3 }],
+      bag,
+      priority,
+    );
+    expect(over.tokens).toEqual(['curse', 'mud']);
+    expect(over.remaining).toEqual([]);
+    const none = assignKindsByPriority([], bag, priority);
+    expect(none.tokens).toEqual([]);
+    expect(none.remaining).toEqual(bag);
+  });
+});
+

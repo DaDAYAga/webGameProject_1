@@ -43,9 +43,10 @@ describe('mageWindAllowsKind / canWindPushFrom', () => {
     expect(mageWindAllowsKind('plain_starter')).toBe(true);
   });
 
-  it('silence / punish 不可動', () => {
+  it('silence / punish / mud 不可動', () => {
     expect(mageWindAllowsKind('silence')).toBe(false);
     expect(mageWindAllowsKind('punish')).toBe(false);
+    expect(mageWindAllowsKind('mud')).toBe(false);
   });
 });
 
@@ -107,6 +108,23 @@ describe('御風術 resolveWindControl', () => {
     });
     expect(r.ok).toBe(false);
     expect(r.reason).toBe('cannot_move_silence');
+  });
+
+  it('mud 不可動 → fail', () => {
+    let board = createEmptyBoard();
+    const from = { q: 2, r: 0 };
+    board = placeTerrain(board, from, 'mud');
+
+    expect(canWindPushFrom(board, from)).toBe(false);
+    expect(mageWindAllowsKind('mud')).toBe(false);
+    const r = resolveWindControl({
+      board,
+      from,
+      direction: DIR_EAST,
+    });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe('cannot_move_mud');
+    expect(getTile(r.board, from)?.kind).toBe('mud');
   });
 
   it('增幅後可推 2 格', () => {

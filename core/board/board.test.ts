@@ -14,6 +14,7 @@ import {
   hexKey,
   kindAllowsCrack,
   kindAllowsPush,
+  kindAllowsStand,
   placeTerrain,
   pushTerrain,
   absorbCurseAt,
@@ -103,6 +104,28 @@ describe('crack / destroy — 破碎與拆牆', () => {
     expect(getTile(hit.board, cell)).toBeUndefined();
   });
 
+  it('intactUnagedStarterWalls: intact plain, not aged, noAge; destroy does not damage boss', () => {
+    const board0 = createOpeningBoard({ intactUnagedStarterWalls: true });
+    const cell: Axial = { q: 1, r: 0 };
+    const tile = getTile(board0, cell);
+    expect(tile?.kind).toBe('plain');
+    expect(tile?.aged).toBe(false);
+    expect(tile?.noAge).toBe(true);
+
+    const hit1 = crackTile(board0, cell);
+    expect(hit1.ok).toBe(true);
+    expect(hit1.cracked).toBe(true);
+    expect(hit1.destroyed).toBe(false);
+    const broken = getTile(hit1.board, cell)!;
+    expect(broken.kind).toBe('plain_broken');
+    expect(broken.aged).toBe(false);
+    expect(broken.noAge).toBe(true);
+
+    const hit2 = crackTile(hit1.board, cell);
+    expect(hit2.destroyed).toBe(true);
+    expect(hit2.damagesBoss).toBe(false);
+  });
+
   it('intactStarterWalls: crack keeps aged; destroy damages boss via aged rule', () => {
     const board0 = createOpeningBoard({ intactStarterWalls: true });
     const cell: Axial = { q: 1, r: 0 };
@@ -163,6 +186,23 @@ describe('punish — 不可推、不可一般拆', () => {
     const dest: Axial = { q: 3, r: 2 };
     expect(canPushOnto(board, dest)).toBe(true);
     expect(pushTerrain(board, cell, dest)).toBeNull();
+  });
+});
+
+describe('mud — 不可站／不可通過、不可拆、不可推', () => {
+  it('mud cannot stand / push / crack', () => {
+    let board = createEmptyBoard();
+    const cell: Axial = { q: 2, r: 2 };
+    board = placeTerrain(board, cell, 'mud');
+    expect(kindAllowsStand('mud')).toBe(false);
+    expect(kindAllowsPush('mud')).toBe(false);
+    expect(kindAllowsCrack('mud')).toBe(false);
+    expect(canStandAt(board, cell)).toBe(false);
+    expect(canPushFrom(board, cell)).toBe(false);
+    const cracked = crackTile(board, cell);
+    expect(cracked.ok).toBe(false);
+    expect(getTile(cracked.board, cell)?.kind).toBe('mud');
+    expect(pushTerrain(board, cell, { q: 3, r: 2 })).toBeNull();
   });
 });
 

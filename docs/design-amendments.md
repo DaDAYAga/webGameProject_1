@@ -434,3 +434,198 @@
 
 - 可走範圍常駐高亮
 - 與完整牌庫／STUB_MOVE 對接
+
+---
+
+## 2026-09-13p — 無職業 HP／詛咒狀態／沉默鄰接／包圍 UI／官方牌庫（鎖定）
+
+> 來源：人類定案 2026-09-13。薄 UI＋少量 core 輔助；**不改** `DEFAULT_MAP_RADIUS`。
+
+### 定案
+
+1. **無職業／單位 HP**：移除試玩 HP。騎士攻擊**不能打其他職業**（只選王／可拆牆）。
+2. **詛咒是狀態**：踩 `curse` → `curseStacks += 1`，`absorbCurseAt` 清格。棋子在類名旁／下顯示單一「咒」標（≥1 層只一枚）。全員開場 stacks＝0（騎士不再預設 2）。
+3. **攜帶上限**：其他職業 1、騎士 2（被動多踩一格）。已達上限則該 curse 格對其不可站／不可路徑通過（`shortestPath.curseCarry`／`canStandAt.blockCurse`）。一般走與大亂流皆適用。英勇衝鋒仍可依 core 清咒格，但 stacks 只加到 cap。
+4. **路徑吸咒**：走過路徑**每一格**（含途經）都 absorb，不只終點。
+5. **沉默**：若角色鄰 1 有 `silence` 地形，不可打出 `CardDefinition.silenced === true` 的牌；`silenced: false`（如嘲諷）仍可。檢查在 `onPlay` 開頭。
+6. **包圍 UI**：盤面變更後對存活者跑 `isSealed(board, hex, { radius: mapRadius })`；封印顯示「封」環／標（有別於「咒」）。剛封印時日誌／toast。`wouldEliminate`（地形壓上已封印者本體）→ 出局（不可行動、列表灰「出局」）。單位不擋包圍（core 原規則）。
+7. **官方牌庫**：每職 16 張洗牌；起手 4、其餘 12 為抽牌堆；輪初抽 1（取代 DrawStub）。手牌上限仍 7/7/8（超則棄最新）。牌庫空 → 跳過抽並日誌「牌庫空了」。
+
+### 份數假設（人類未指定張數分配，實作採用）
+
+| 職業 | 16 張構成 |
+|---|---|
+| 騎士 | attack×6、heroic_charge×2、faith×2、taunt×2、devotion×2、undying×2 |
+| 槍手 | shot×6、playful_bottle×2、mischief_bottle×2、turbulence×2、power_up×2、big_show×2 |
+| 法師 | magic_arrow×6、amplify×2、wind×2、focus×2、barrier×2、planar_swap×2 |
+
+### 給 bot（禁改）
+
+- 不要加回職業 HP／打人扣血
+- 不要改 core `DEFAULT_MAP_RADIUS`
+- 不要讓單位佔格擋包圍
+
+### 未定
+
+- 牌庫份數是否再調 → **2026-09-13t** 改預設 15
+- 出局棋子是否移出盤面 → **2026-09-13t** 離場、格改一般
+
+---
+
+## 2026-09-13q — 路徑吸咒／衝鋒落地續衝／起手 4／不打人（鎖定）
+
+1. 最短路徑途經 `curse` 一律上身清格（等長路徑優先走詛咒格）。
+2. 英勇衝鋒：穿老化牆後**站上該格繼續衝**，直到完整牆／沉默／王／邊緣（或他人格前一格）。出牌後立刻結束回合（不再用舊座標覆蓋落地）。
+3. 起手固定 4；狀態列顯示手牌／牌庫張數。舊對局若仍 7 張請重製。
+4. 騎士攻擊不可選其他職業。
+
+
+---
+
+## 2026-09-13r — 鄰沉默 UI／泥濘地形／基礎移動 −1／種類威脅優先級（鎖定）
+
+> 來源：人類 playtest follow-up 2026-09-13。**不改** `DEFAULT_MAP_RADIUS`。
+
+### 定案
+
+1. **鄰沉默出牌（鎖定）**  
+   角色鄰 1 有 `silence` 地形時，不可打出 `silenced === true` 的牌（檢查已在 `onPlay`）。手牌按鈕：`adjacentSilence && card.silenced` → disabled、灰／變淡、`title`「鄰近沉默，無法打出」。`silenced: false`（嘲諷）仍可點。狀態列／職業鈕顯示「鄰沉默」。棋子可加小「默」標（有別於咒／封）。
+
+2. **新地形 `mud`（泥濘）**  
+   - 不可站／不可通過（`kindAllowsStand` false）  
+   - 不可拆（`kindAllowsCrack` false）  
+   - 不可推（`kindAllowsPush` false）  
+   - 不老化（老化仍僅 plain 系）  
+   - 計入包圍  
+   - 英勇衝鋒：硬停前一格（同 silence／punish）  
+   - 御風術：不可搬 mud  
+   - 畫面：棕填 `#6b4a2a`、標籤「泥濘」
+
+3. **鄰泥濘只扣基礎移動 −1**  
+   `basicMoveCap(board, hex, base = 2)` → `max(0, base - (adjacent mud ? 1 : 0))`。只影響 `tryMoveTo`／`movesLeft`。卡牌移動（大亂流、英勇衝鋒、御風）不扣。  
+   出生／`freshActor`、輪末 `finishRound`（punish 鋪完後的 board）用 cap 設 `movesLeft`。王中途鋪地（`noteBossDamage`）後把存活者剩餘 `movesLeft` clamp 到新 cap。cap 因泥濘為 1 時寫日誌。
+
+4. **種類威脅優先級**  
+   選格仍 `pickThreatPlacementHexes`（位置威脅序）。種類**不**再把袋隨機 shift 到格上。  
+   `ResetSetup.kindPriority` 預設（高＝先鋪到最威脅空格）：silence 40、curse 30、mud 20、plain（完整）10、plain_aged 0。  
+   重製表單每 kind 一個「威脅優先級」數字（在數量旁）。  
+   放置 N 格：picks 已高→低；袋拷貝依 priority 降序穩定排序，依序指派，用掉的 token 從袋移除。輔助：`assignKindsByPriority`。
+
+5. **重製／王牌庫**  
+   `KindToken` 含 `'mud'`；`ResetSetup.mudTiles` 預設 **0**；`buildKindBag` 計入泥濘。袋合計：aged＋intact＋curse＋silence＋**mud** ＝ deckSize。懸停 `byKind.mud`；重製泥濘＝0 時不顯示剩餘（同老化）。
+
+### 給 bot（禁改）
+
+- 不要改 core `DEFAULT_MAP_RADIUS`
+- 不要讓泥濘扣卡牌移動
+- 不要把 kind 袋隨機 shift 蓋過 priority 指派
+
+---
+
+## 2026-09-13s — 種類袋＝可鋪格數／一般格／魔王選格（鎖定）
+
+1. 地形袋合計須＝`place2×2 + place3×3 + place4×4`（預設 78），不再等於手卡張數 30。
+2. 預設：一般格 62、詛咒 15（約一般的 1/4）、沉默 1、泥濘 0、老化 0。
+3. 畫面「牆體」改稱「一般」／「一般格」。
+4. 選格改魔王視角：封死／瀕封仍最高；遠程與接近王的路線加權；一格鄰兩人加分；未帶咒比已帶咒更想壓。種類優先級預設沉默 50／詛咒 32／泥濘 22／一般 10／老化 0。
+
+
+---
+
+## 2026-09-13t — 越打越擠／出局離場／咒滿出局／15 張牌庫／必須重製／難度疊加（鎖定）
+
+> 來源：人類定案 2026-09-13。**不改** `DEFAULT_MAP_RADIUS`。線上合作／教學／GitHub Pages 不是本任務。
+
+### 定案 — 越打越擠是主軸
+
+半徑 5 上 78 格種類袋（預設 15×2＋12×3＋3×4）是**刻意**的擠壓，不是漏算。玩起來再調。
+
+### 定案 — 出局離場，格改一般
+
+當單位出局（包圍壓上 **或** 咒滿 **或** 之後任何原因）：
+
+- 若該格仍空：`placeTerrain(..., 'plain')` 未老化一般格，並登錄老化（同其他未老化一般）。
+- 若格上已有地形（壓上）**不**重複鋪。
+- `eliminated: true`、`endedThisRound: true`、moves/actions 0。
+- **不畫棋子**（`boardActors` 濾掉 eliminated）。
+- `occupiedExcept`／威脅佔格／出生：跳過 eliminated，不再擋格。
+- 職業鈕仍顯示「出局」。
+- 日誌「出局，離場，格改一般」。
+- 三人皆出局且王仍存活 → 敗北。
+
+輔助：`placeUnagedPlainIfEmpty`、`curseFullAfterAbsorb`。
+
+### 定案 — 咒滿＝出局
+
+`curseCarryCap`：騎士 2、其餘 1。**任何**吸咒使 `curseStacks >= cap`（走路路徑、衝鋒吸收、奉獻）立刻依上條出局。槍手／法師第一層出局；騎士第二層出局。不可停在 cap 上。仍存活時 cap 仍擋再踩咒格。
+
+### 定案 — 玩家牌庫預設 15
+
+- 6× 基礎：騎 `attack`、槍 `shot`、法 `magic_arrow`
+- 4 小技 ×2：騎 heroic_charge / faith / taunt / devotion；槍 playful_bottle / mischief_bottle / turbulence / power_up；法 amplify / wind / focus / barrier
+- 1× 大招：騎 `undying`、槍 `big_show`、法 `planar_swap`
+
+重製表單每職 4 個小技核取；可選 **0–2**；每勾 +1 張。預設全不勾。`buildShuffledDeck(id, seq, extraSmallIds)`。起手仍 4，上限 7/7/8。
+
+**必須經重製開局**：initial `phase = 'reset-setup'`（不是 `'playing'`）。勝／敗後既有重製鈕。
+
+### 定案 — 難度（可疊加核取；確認時由預設＋旗標重算袋／放置）
+
+活選項（表單由上到下）：
+
+1. **堅固圍牆** — 開場 6 牆＝完整 `plain` + `aged:false` + `noAge`（`createOpeningBoard({ intactUnagedStarterWalls: true })`）。預設 OFF＝現況破碎＋老化。
+2. **寸步難移** — 出生完成後在隨機**內圈**空格鋪 3 泥濘（非邊緣、非王、非佔格、非既有地形）。不進種類袋。
+3. **沉默無聲** — `silenceTiles += 1`（預設 1→2），從一般格扣 1（`intactWalls -= 1`），袋合計仍＝可鋪格數。
+5. **瘋狂詛咒** — 詛咒約為一般格 1/3，總格不變。沉默／泥／老化先固定，其餘 `intact = round(remaining×3/4)`。例：關 62/15/1；開（沉默 1）≈58/19/1＝78。
+6. **瘋狂壓力** — `place4 += 2`、`place2 -= 2`（13/12/5），可鋪 82；袋自動 +4 一般格。
+
+疊加序：壓力 → 沉默 → 詛咒。
+
+灰項**置底**（`disabled`，不實作規則）：**4 代價移動**（即原「C版」；C 版不是另一項）。線上合作之後再做。
+
+### 給 bot（禁改）
+
+- 不要改 core `DEFAULT_MAP_RADIUS`
+- 不要實作代價移動／C 版規則
+- 不要把灰項排到活選項前面
+
+
+---
+
+## 2026-09-14a — 聚精會神實際抽牌（鎖定）
+
+`resolveFocus` 本來就算 2／增幅 3，薄 UI 只寫「應抽」。現在依 `drawCount` 從該職牌庫抽進手牌（上限棄最新；牌庫不夠就抽到空），再強制結束回合。結束回合必須帶抽完後的 actors，避免輪末蓋掉新手牌。
+
+
+---
+
+## 2026-09-14b — 重製小技上移／槍手行動點（鎖定）
+
+1. 重製表：職業小技 +1、難度 緊接在半徑／王 HP 後面；袋數字往下。
+2. 氣瓶／射擊／Power UP 耗行動後，計次牌（含裝填抽到的射擊）不可再打。只有大招授予的那 1 張射擊可免費打。
+3. 射擊／臨時射擊依 `drawFromAmmo` 真的抽牌。
+
+
+---
+
+## 2026-09-14c — C 版＝代價移動（鎖定）
+
+難度灰項只留 **4 代價移動**。C 版（計畫中）就是這項，已從表單移除。
+
+
+---
+
+## 2026-09-14d — 威脅優先級＝選格，不是抽袋（鎖定）
+
+人類原意：優先級只排「鋪哪一格最能壓人」（`pickThreatPlacementHexes`）。
+袋子種類開場洗亂，每次鋪格依袋順序抽出，**不再** `assignKindsByPriority` 先吐沉默／詛咒。
+重製表格種只留張數，右側優先數字移除。
+
+
+---
+
+## 2026-09-14e — 封印擋出牌／壓封印本體出局（鎖定）
+
+1. 已封印不可出牌、不可移動。
+2. 六鄰滿仍只先封印；下一次王鋪格可選已封印者本體並出局（選格不再跳過該佔格）。
+3. 魔法箭等傷王鋪格必須帶出手後的 actors，避免行動點被蓋回。

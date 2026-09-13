@@ -19,12 +19,28 @@ type HandProps = {
   onPlay: (card: HandCard) => void;
   /** 懸停預覽：進入傳牌、離開傳 null；不觸發出牌。 */
   onCardHover?: (card: HandCard | null) => void;
+  /** 棋子鄰 1 有沉默地形：silenced 牌不可打。 */
+  adjacentSilence?: boolean;
+  /** 剩餘行動點；0 時計次牌灰掉（大招再射除外）。 */
+  actionsLeft?: number;
+  /** 大招授予的免費射擊。 */
+  mayBonusShot?: boolean;
+  /** 已封印：全部牌不可打。 */
+  sealed?: boolean;
 };
 
 type TipPos = { left: number; top: number };
 
 /** 手牌列表：點一張就回傳給 App 去呼叫 core；懸停僅預覽；滿 2 秒顯示完整 tooltip。 */
-export function Hand({ cards, onPlay, onCardHover }: HandProps) {
+export function Hand({
+  cards,
+  onPlay,
+  onCardHover,
+  adjacentSilence = false,
+  actionsLeft = 99,
+  mayBonusShot = false,
+  sealed = false,
+}: HandProps) {
   const [richCard, setRichCard] = useState<HandCard | null>(null);
   const [tipPos, setTipPos] = useState<TipPos | null>(null);
   const timerRef = useRef<number | null>(null);
@@ -74,28 +90,53 @@ export function Hand({ cards, onPlay, onCardHover }: HandProps) {
   return (
     <div className="hand" role="list" aria-label="手牌">
       {cards.map((card) => {
-        const counted =
+        const countsLabel =
           card.countsTowardAction === undefined
             ? null
             : card.countsTowardAction
               ? '計次'
               : '不計次';
         const silence = card.silenced ? '受沉默' : null;
-        const bits = [counted, silence].filter(Boolean).join(' · ');
+        const bits = [countsLabel, silence].filter(Boolean).join(' · ');
+        const blockedBySilence = adjacentSilence && card.silenced === true;
+        const isCounted = card.countsTowardAction === true;
+        const blockedByAction =
+          isCounted &&
+          actionsLeft <= 0 &&
+          !(card.cardId === 'shot' && mayBonusShot);
+        const blocked = blockedBySilence || blockedByAction || sealed;
         return (
           <button
             key={card.instanceId}
             type="button"
-            className="card-btn"
+            className={
+              'card-btn' +
+              (blockedBySilence ? ' silenced-blocked' : '') +
+              (blockedByAction ? ' action-blocked' : '')
+            }
             role="listitem"
             ref={(el) => {
               if (el) btnRefs.current.set(card.instanceId, el);
               else btnRefs.current.delete(card.instanceId);
             }}
-            onClick={() => onPlay(card)}
+            onClick={() => {
+              if (blocked) return;
+              onPlay(card);
+            }}
+            disabled={blocked}
             onMouseEnter={() => onEnter(card)}
             onMouseLeave={onLeave}
-            title={card.wired ? '點擊結算' : '尚未串結算'}
+            title={
+              sealed
+                ? '已封印，無法打出'
+                : blockedBySilence
+                ? '鄰近沉默，無法打出'
+                : blockedByAction
+                  ? '本回合行動已用完'
+                : card.wired
+                  ? '點擊結算'
+                  : '尚未串結算'
+            }
           >
             <span className="name">{card.name}</span>
             {bits ? <span className="meta">{bits}</span> : null}

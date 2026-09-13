@@ -1,13 +1,12 @@
 /**
  * 騎士「英勇衝鋒」×2：沿軸向直線衝到圖邊或硬停；計次；受沉默。
- * 可連續穿老化牆（牆傷 cap 2）與未老化破碎（不清王血）；撞完整牆／punish／silence／王／單位硬停。
+ * 可連續穿老化牆（落地該格續衝）與未老化破碎；撞完整牆／punish／silence／mud／王／邊緣／單位前一格硬停。
  * 結算後一律 forceEndTurn。見 design-amendments 2026-09-09f。
  */
 
 import {
   BOSS_HEX,
   absorbCurseAt,
-  canStandAt,
   destroyTile,
   getTile,
   kindAllowsCrack,
@@ -20,7 +19,7 @@ import {
   isInMap,
   type MapBounds,
 } from '../../enclosure/index.js';
-import { add, distance, equals, type Axial } from '../../hex/index.js';
+import { add, equals, type Axial } from '../../hex/index.js';
 import {
   HEROIC_CHARGE_BOSS_DRAWS,
   HEROIC_CHARGE_BOSS_HIT_DAMAGE,
@@ -130,23 +129,7 @@ export function resolveHeroicCharge(
 
     const hitUnit = findUnitAt(units, next);
     if (hitUnit) {
-      const landing = input.landingHex;
-      if (
-        !landing ||
-        distance(landing, hitUnit.hex) !== 1 ||
-        !canStandAt(board, landing) ||
-        equals(landing, hitUnit.hex) ||
-        equals(landing, bossHex)
-      ) {
-        return failHeroic(board, start, curseStop, 'invalid_landing_hex');
-      }
-      // 落點不可被其他單位佔（除自己起點）
-      for (const u of units) {
-        if (equals(u.hex, landing)) {
-          return failHeroic(board, start, curseStop, 'landing_occupied');
-        }
-      }
-      pos = landing;
+      // 不打人：停在前一格，不佔他人格、不失敗。
       events.push({ type: 'ChargeBlocked', hex: next, reason: 'unit' });
       endReason = 'charge_into_unit';
       break;
@@ -168,6 +151,12 @@ export function resolveHeroicCharge(
     if (tile.kind === 'silence') {
       events.push({ type: 'ChargeBlocked', hex: next, reason: 'silence' });
       endReason = 'charge_into_silence';
+      break;
+    }
+
+    if (tile.kind === 'mud') {
+      events.push({ type: 'ChargeBlocked', hex: next, reason: 'mud' });
+      endReason = 'charge_into_mud';
       break;
     }
 

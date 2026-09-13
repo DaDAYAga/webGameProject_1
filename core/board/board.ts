@@ -53,19 +53,27 @@ export function createEmptyBoard(): Board {
  * 擋移動；不擋遠程傷害。不跑老化計時（開場直接是 aged 狀態）。
  */
 export type OpeningBoardOptions = {
-  /** true = 開場牆完整（較難）；預設 false = 開場已破碎 */
+  /** true = 開場牆完整且已老化（較難）；預設 false = 開場已破碎 */
   intactStarterWalls?: boolean;
+  /**
+   * 堅固圍牆：開場 6 牆為完整未老化一般格（plain + aged:false + noAge）。
+   * 優先於 intactStarterWalls。預設 OFF。
+   */
+  intactUnagedStarterWalls?: boolean;
 };
 
 export function createOpeningBoard(opts: OpeningBoardOptions = {}): Board {
+  const unagedIntact = opts.intactUnagedStarterWalls === true;
   const intact = opts.intactStarterWalls === true;
   const tiles = new Map<string, Tile>();
   for (const h of neighbors(BOSS_HEX)) {
     tiles.set(
       hexKey(h),
-      intact
-        ? makeTile('plain', { aged: true })
-        : makeTile('plain_broken', { aged: true }),
+      unagedIntact
+        ? makeTile('plain', { aged: false, noAge: true })
+        : intact
+          ? makeTile('plain', { aged: true })
+          : makeTile('plain_broken', { aged: true }),
     );
   }
   return { tiles };
@@ -186,6 +194,10 @@ export type CanStandAtOptions = {
    * 呼叫端勿把「自己」放進來（自身不擋自己）；起點由 shortestPath 不重驗。
    */
   occupied?: readonly Axial[];
+  /**
+   * 已達詛咒攜帶上限時，把 curse 格視為不可站（自願走／路徑用）。
+   */
+  blockCurse?: boolean;
 };
 
 /**
@@ -194,6 +206,7 @@ export type CanStandAtOptions = {
  * - occupied 佔格：否（盟友等同移動阻擋）
  * - 空格：是
  * - 有地形：依 kindAllowsStand（curse 可自願踩；牆／punish／silence 預設否）
+ * - blockCurse：curse 亦否
  */
 export function canStandAt(
   board: Board,
@@ -208,6 +221,7 @@ export function canStandAt(
   }
   const tile = getTile(board, hex);
   if (!tile) return true;
+  if (opts.blockCurse === true && tile.kind === 'curse') return false;
   return kindAllowsStand(tile.kind);
 }
 

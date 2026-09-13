@@ -43,7 +43,17 @@ export {
 
 export {
   pickThreatPlacementHexes,
+  assignKindsByPriority,
   type ThreatActor,
   type PickThreatPlacementOptions,
 } from './threat.js';
 
+
+export {
+  hexCapacityOf,
+  splitIntactAndCurse,
+  applyDifficultyBag,
+  pickInteriorEmptyHexes,
+  type DifficultyBagCounts,
+  type BagDifficultyFlags,
+} from './difficulty.js';

@@ -11,14 +11,14 @@ import type { TerrainKind, Tile } from './types.js';
  * 為什麼：所有表列 kind 皆「是」；空格不算。
  */
 export function kindCountsForEnclosure(kind: TerrainKind): boolean {
-  // enclosure: plain / plain_broken / plain_starter / punish / curse / silence → 皆是
+  // enclosure: plain / plain_broken / plain_starter / punish / curse / silence / mud → 皆是
   void kind;
   return true;
 }
 
 /**
  * 玩家預設能否站在此地形上。
- * - plain 系、punish：否
+ * - plain 系、punish、mud：否
  * - curse：可（自願踩則上身；上身結算不在本層）
  * - silence：預設否（// UNRESOLVED: 是否另有例外可踩）
  */
@@ -28,6 +28,7 @@ export function kindAllowsStand(kind: TerrainKind): boolean {
     case 'plain_broken':
     case 'plain_starter':
     case 'punish':
+    case 'mud':
       return false;
     case 'curse':
       // 自願踩則上身：站格允許，詛咒層數由上層處理
@@ -44,7 +45,7 @@ export function kindAllowsStand(kind: TerrainKind): boolean {
 
 /**
  * 此地形能否被「推」（例如御風術搬移牆）。
- * punish：否；silence：表定預設可（牌面另有限制時由上層收斂）。
+ * punish／mud：否；silence：表定預設可（牌面另有限制時由上層收斂）。
  */
 export function kindAllowsPush(kind: TerrainKind): boolean {
   switch (kind) {
@@ -54,6 +55,7 @@ export function kindAllowsPush(kind: TerrainKind): boolean {
     case 'curse':
       return true;
     case 'punish':
+    case 'mud':
       return false;
     case 'silence':
       // 交接表：預設可推；御風術牌面寫不可動 silence — 以牌面／上層為準
@@ -67,7 +69,7 @@ export function kindAllowsPush(kind: TerrainKind): boolean {
 
 /**
  * 一般攻擊／拆牆能否對此 kind 做「破碎／拆掉」。
- * curse：否（要吃掉）；punish：否；silence：UNRESOLVED → 本層回 false。
+ * curse：否（要吃掉）；punish／mud：否；silence：UNRESOLVED → 本層回 false。
  */
 export function kindAllowsCrack(kind: TerrainKind): boolean {
   switch (kind) {
@@ -82,6 +84,8 @@ export function kindAllowsCrack(kind: TerrainKind): boolean {
       return false;
     case 'silence':
       // UNRESOLVED: 沉默格一般拆
+      return false;
+    case 'mud':
       return false;
     default: {
       const _exhaustive: never = kind;

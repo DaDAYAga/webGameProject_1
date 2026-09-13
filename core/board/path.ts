@@ -11,7 +11,7 @@ import {
   type Axial,
   type ShrinkingFanOptions,
 } from '../hex/index.js';
-import { canStandAt, hexKey } from './board.js';
+import { canStandAt, getTile, hexKey } from './board.js';
 import type { Board } from './types.js';
 
 /** shortestPath 選項。 */
@@ -36,16 +36,45 @@ export type ShortestPathOptions = {
    * 勿含行走者自身。
    */
   occupied?: readonly Axial[];
+  /**
+   * 詛咒攜帶：路徑上每踩一格 curse 消耗 1 剩餘容量；
+   * 已達 cap 則 curse 不可進（視同不可站）。英勇衝鋒不走此選項。
+   */
+  curseCarry?: { stacks: number; cap: number };
 };
+
+function standOptsFor(
+  options: ShortestPathOptions,
+  stacks: number,
+): { occupied?: readonly Axial[]; blockCurse?: boolean } {
+  const o: { occupied?: readonly Axial[]; blockCurse?: boolean } = {};
+  if (options.occupied) o.occupied = options.occupied;
+  if (options.curseCarry && stacks >= options.curseCarry.cap) {
+    o.blockCurse = true;
+  }
+  return o;
+}
+
+function stacksAfterEnter(
+  board: Board,
+  hex: Axial,
+  stacksBefore: number,
+  curseCarry: { stacks: number; cap: number } | undefined,
+): number | null {
+  if (!curseCarry) return stacksBefore;
+  const tile = getTile(board, hex);
+  if (!tile || tile.kind !== 'curse') return stacksBefore;
+  if (stacksBefore >= curseCarry.cap) return null;
+  return stacksBefore + 1;
+}
 
 /**
  * 在可站格上找 from→toward 的最短路徑（BFS）。
  *
- * - 進入鄰格僅當 `canStandAt(board, hex, { occupied })`（**起點 from 不重驗**）
+ * - 進入鄰格僅當 `canStandAt`（**起點 from 不重驗**）
  * - 預設 toward 必須可站，否則 null；`allowUnstandableTarget` 可放寬
+ * - `curseCarry`：BFS 狀態含沿途 stacks，超量 curse 不可進
  * - 回傳含兩端的格子序列；不可達回 null；from===toward 回 `[from]`
- *
- * 為什麼：使用者要「每次取最短路徑時多判斷 canStandAt」— 幾何扇形不夠，必須繞牆。
  */
 export function shortestPath(
   board: Board,
@@ -57,75 +86,113 @@ export function shortestPath(
   const maxSteps =
     options.maxSteps ?? Math.max(distance(from, toward) * 4, 24);
   const isAllowed = options.isAllowedHex;
-  const standOpts = options.occupied ? { occupied: options.occupied } : {};
+  const curseCarry = options.curseCarry;
+  const startStacks = curseCarry?.stacks ?? 0;
+  const baseStand = standOptsFor(options, startStacks);
 
   if (equals(from, toward)) {
     return [{ q: from.q, r: from.r }];
   }
 
-  // 預設：目標不可站 → 直接失敗（allowUnstandableTarget 時略過）
-  if (!allowUnstandableTarget && !canStandAt(board, toward, standOpts)) {
-    return null;
+  // 預設：目標不可站 → 直接失敗（allow 時略過；curse 目標另依沿途 stacks）
+  if (!allowUnstandableTarget) {
+    const towardTile = getTile(board, toward);
+    const towardIsCurse = towardTile?.kind === 'curse';
+    if (!towardIsCurse || !curseCarry) {
+      if (!canStandAt(board, toward, baseStand)) return null;
+    } else if (startStacks >= curseCarry.cap && !canStandAt(board, toward, baseStand)) {
+      return null;
+    }
   }
+
+  // state key = hex|stacks（無 curseCarry 時 stacks 固定 0，等同舊行為）
+  const stateKey = (hex: Axial, stacks: number) =>
+    curseCarry ? `${hexKey(hex)}|${stacks}` : hexKey(hex);
 
   const parent = new Map<string, string | null>();
   const stepsAt = new Map<string, number>();
-  const startKey = hexKey(from);
+  const hexAt = new Map<string, Axial>();
+  const stacksAt = new Map<string, number>();
+
+  const startKey = stateKey(from, startStacks);
   parent.set(startKey, null);
   stepsAt.set(startKey, 0);
+  hexAt.set(startKey, { q: from.q, r: from.r });
+  stacksAt.set(startKey, startStacks);
 
-  const queue: Axial[] = [{ q: from.q, r: from.r }];
+  const queue: string[] = [startKey];
   let head = 0;
 
   while (head < queue.length) {
-    const cur = queue[head++]!;
-    const curKey = hexKey(cur);
+    const curKey = queue[head++]!;
+    const cur = hexAt.get(curKey)!;
+    const curStacks = stacksAt.get(curKey)!;
     const curSteps = stepsAt.get(curKey)!;
 
     if (equals(cur, toward)) {
-      return reconstructPath(parent, from, toward);
+      return reconstructPathFromStates(parent, hexAt, startKey, curKey);
     }
 
     if (curSteps >= maxSteps) continue;
 
-    for (const n of neighbors(cur)) {
-      const nk = hexKey(n);
-      if (parent.has(nk)) continue;
+    const standNow = standOptsFor(options, curStacks);
+
+    const nbrs = [...neighbors(cur)];
+    if (curseCarry) {
+      nbrs.sort((a, b) => {
+        const ac = getTile(board, a)?.kind === 'curse' ? 0 : 1;
+        const bc = getTile(board, b)?.kind === 'curse' ? 0 : 1;
+        return ac - bc;
+      });
+    }
+
+    for (const n of nbrs) {
       if (isAllowed && !isAllowed(n)) continue;
 
       const isTarget = equals(n, toward);
-      // 進入條件：目標在 allow 時可不驗站格；其餘必須 canStandAt（含 occupied）
+      const nextStacks = stacksAfterEnter(board, n, curStacks, curseCarry);
+      if (nextStacks === null) continue;
+
       if (isTarget) {
-        if (!allowUnstandableTarget && !canStandAt(board, n, standOpts)) continue;
-      } else if (!canStandAt(board, n, standOpts)) {
+        if (!allowUnstandableTarget) {
+          const standEnter = standOptsFor(options, curStacks);
+          if (!canStandAt(board, n, standEnter)) continue;
+        }
+      } else if (!canStandAt(board, n, standNow)) {
         continue;
       }
 
+      const nk = stateKey(n, nextStacks);
+      if (parent.has(nk)) continue;
+
       parent.set(nk, curKey);
       stepsAt.set(nk, curSteps + 1);
-      queue.push({ q: n.q, r: n.r });
+      hexAt.set(nk, { q: n.q, r: n.r });
+      stacksAt.set(nk, nextStacks);
+      queue.push(nk);
     }
   }
 
   return null;
 }
 
-function reconstructPath(
+function reconstructPathFromStates(
   parent: Map<string, string | null>,
-  from: Axial,
-  toward: Axial,
+  hexAt: Map<string, Axial>,
+  startKey: string,
+  endKey: string,
 ): Axial[] {
   const path: Axial[] = [];
-  let key: string | null = hexKey(toward);
+  let key: string | null = endKey;
   while (key !== null) {
-    const [qs, rs] = key.split(',');
-    path.push({ q: Number(qs), r: Number(rs) });
+    path.push(hexAt.get(key)!);
     const prev = parent.get(key);
     key = prev === undefined ? null : prev;
   }
   path.reverse();
-  if (path.length === 0 || !equals(path[0]!, from)) {
-    return [{ q: from.q, r: from.r }, ...path];
+  if (path.length === 0) {
+    const s = hexAt.get(startKey)!;
+    return [{ q: s.q, r: s.r }];
   }
   return path;
 }

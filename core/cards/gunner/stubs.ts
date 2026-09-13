@@ -6,7 +6,7 @@
 import type { CardDefinition } from '../types.js';
 import type { GunnerCardId, GunnerCardInstance } from './types.js';
 
-/** 槍手牌定義表（薄標；氣瓶計次：UNRESOLVED 預設不計次）。 */
+/** 槍手牌定義表（薄標；氣瓶改計次，2026-09-13）。 */
 export const GUNNER_CARD_DEFS: Record<GunnerCardId, CardDefinition> = {
   shot: {
     id: 'shot',
@@ -18,14 +18,14 @@ export const GUNNER_CARD_DEFS: Record<GunnerCardId, CardDefinition> = {
   playful_bottle: {
     id: 'playful_bottle',
     name: '頑皮氣瓶',
-    countsTowardAction: false,
+    countsTowardAction: true,
     silenced: true,
     kind: ['utility', 'ammo'],
   },
   mischief_bottle: {
     id: 'mischief_bottle',
     name: '胡鬧氣瓶',
-    countsTowardAction: false,
+    countsTowardAction: true,
     silenced: true,
     kind: ['utility', 'ammo'],
   },

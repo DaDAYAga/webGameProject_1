@@ -10,7 +10,8 @@ export type TerrainKind =
   | 'plain_starter'
   | 'punish'
   | 'curse'
-  | 'silence';
+  | 'silence'
+  | 'mud';
 
 /**
  * 單一格上的地形狀態。

@@ -37,7 +37,7 @@ export type KnightCardEvent =
   | { type: 'ActorMoved'; from: Axial; to: Axial }
   | { type: 'CurseAbsorbed'; hex: Axial }
   | { type: 'CurseStopped'; hex: Axial }
-  | { type: 'ChargeBlocked'; hex: Axial; reason: 'punish' | 'boss' | 'silence' | 'unit' | 'map_edge' }
+  | { type: 'ChargeBlocked'; hex: Axial; reason: 'punish' | 'boss' | 'silence' | 'mud' | 'unit' | 'map_edge' }
   | { type: 'WallPierce'; hex: Axial; bossDamageApplied: number }
   | { type: 'DrawRequested'; count: number; reason?: string }
   | { type: 'CurseClearedSelf'; amount: number }

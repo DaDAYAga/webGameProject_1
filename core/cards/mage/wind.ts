@@ -1,6 +1,6 @@
 /**
  * 法師「御風術」×2：計次；把地形推 1 格（增幅後 2 格）。
- * 可動 plain／plain_broken／plain_starter／curse；不可動 silence／punish。
+ * 可動 plain／plain_broken／plain_starter／curse；不可動 silence／punish／mud。
  * 禁止壓頭（推到已封印單位本體 → wouldEliminate）。
  */
 
@@ -38,6 +38,7 @@ export function mageWindAllowsKind(kind: TerrainKind): boolean {
       return true;
     case 'silence':
     case 'punish':
+    case 'mud':
       return false;
     default: {
       const _exhaustive: never = kind;
@@ -119,7 +120,7 @@ export function resolveWindControl(
   if (!canWindPushFrom(board, cursor)) {
     const tile = getTile(board, cursor);
     const reason =
-      tile?.kind === 'silence' || tile?.kind === 'punish'
+      tile?.kind === 'silence' || tile?.kind === 'punish' || tile?.kind === 'mud'
         ? `cannot_move_${tile.kind}`
         : 'cannot_push_from';
     return {
