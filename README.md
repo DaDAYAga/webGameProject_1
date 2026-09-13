@@ -105,10 +105,12 @@ npm test
 npx vitest run
 ```
 
-## 薄 UI：手牌 + 棋盤 Canvas + 兩步移動鎖定（完成）
+## 薄 UI：手牌 + 棋盤 Canvas + 兩步移動鎖定 + 剩餘職業牌（完成）
 
-`ui/` 為 Vite + React + TypeScript 薄殼：開場六角棋盤、每回合最多 2 步（`shortestPath`）、首步後鎖定出牌至走完、硬編碼手牌、點牌呼叫 core、事件日誌。
+`ui/` 為 Vite + React + TypeScript 薄殼：開場六角棋盤、每回合最多 2 步（`shortestPath`）、首步後鎖定出牌至走完、硬編碼手牌、點牌呼叫 core、`pendingPlay` 點格指定、事件日誌。
 不含牌庫組建、AI、完整對局 loop；路徑用 `core/board.shortestPath`（非獨立 A*）。
+
+已串：槍手 shot／bottles／turbulence／power_up(temp_shot)／big_show；法師 arrow／amplify／wind／focus／barrier／planar_swap；騎士 attack／faith／heroic_charge／devotion／taunt／undying。見 `docs/design-amendments.md` **2026-09-13j**。
 
 ```bash
 npm install
@@ -116,12 +118,12 @@ npm run dev    # Vite，預設 http://localhost:5173
 npm run build  # 輸出 dist-ui/
 ```
 
-試玩：開 `npm run dev` → 可先出牌 → 點 1～2 步可站格移動（首步後不可出牌）→ 走完 2 步或卡住後再出牌 →「結束回合」重置移動 2／清鎖。點牆／王格／>2 步路徑看日誌拒絕。
+試玩：開 `npm run dev` → 可先出牌 → 有指定模式時點格＝牌目標（非移動）→ 點 1～2 步可站格移動（首步後不可出牌）→ 走完再出牌 →「結束回合」重置。騎士 tab 有他人回合／死亡／輪末開關。
 
 學習入口：
-1. `ui/src/BoardCanvas.tsx` — axial↔像素、開場牆、單位標記
-2. `ui/src/App.tsx` — `shortestPath` + `moveLocked`；點牌 → core（attacker = unitHex）
+1. `ui/src/BoardCanvas.tsx` — axial↔像素、開場牆、單位／隊友標記
+2. `ui/src/App.tsx` — `pendingPlay` + `moveLocked`；點牌 → core
 
 ## 下一步
 
-**balance 控制台**、可走範圍高亮、或接真實 `core/turn` 移動點。不要一次做完整牌庫／AI／對局 loop。
+**balance 控制台**、可走／可指定範圍高亮、或接真實 `core/turn` 移動點。不要一次做完整牌庫／AI／對局 loop。

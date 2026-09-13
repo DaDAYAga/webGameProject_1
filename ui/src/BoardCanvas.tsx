@@ -28,7 +28,9 @@ type BoardCanvasProps = {
   board: Board;
   /** 目前 demo 單位所在格；畫標記用。 */
   unitHex: Axial;
-  /** 點到一格時呼叫；App 決定能否移動。 */
+  /** 薄 demo 隊友（奉獻／位面）；可選。 */
+  allyHex?: Axial;
+  /** 點到一格時呼叫；App 決定能否移動／完成牌目標。 */
   onHexClick?: (hex: Axial) => void;
 };
 
@@ -97,8 +99,9 @@ function fillForTile(tile: Tile): string {
   return '#2a3140';
 }
 
-function strokeForHex(hex: Axial, unitHex: Axial): string {
+function strokeForHex(hex: Axial, unitHex: Axial, allyHex?: Axial): string {
   if (equals(hex, unitHex)) return '#7ec8ff';
+  if (allyHex && equals(hex, allyHex)) return '#a0e8b0';
   if (equals(hex, BOSS_HEX)) return '#e8a0a0';
   return '#3d4658';
 }
@@ -113,7 +116,7 @@ function labelForHex(hex: Axial, board: Board): string {
 }
 
 /** 畫一張開場棋盤：半徑 DEFAULT_MAP_RADIUS、王在 (0,0)、單位標記。 */
-export function BoardCanvas({ board, unitHex, onHexClick }: BoardCanvasProps) {
+export function BoardCanvas({ board, unitHex, allyHex, onHexClick }: BoardCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const hexes = useMemo(
@@ -163,8 +166,8 @@ export function BoardCanvas({ board, unitHex, onHexClick }: BoardCanvasProps) {
       ctx.closePath();
       ctx.fillStyle = fillForHex(h, board);
       ctx.fill();
-      ctx.strokeStyle = strokeForHex(h, unitHex);
-      ctx.lineWidth = equals(h, BOSS_HEX) || equals(h, unitHex) ? 2 : 1;
+      ctx.strokeStyle = strokeForHex(h, unitHex, allyHex);
+      ctx.lineWidth = equals(h, BOSS_HEX) || equals(h, unitHex) || (allyHex !== undefined && equals(h, allyHex)) ? 2 : 1;
       ctx.stroke();
 
       const label = labelForHex(h, board);
@@ -202,7 +205,26 @@ export function BoardCanvas({ board, unitHex, onHexClick }: BoardCanvasProps) {
       ctx.textBaseline = 'middle';
       ctx.fillText('我', cx, cy);
     }
-  }, [board, hexes, layout, unitHex]);
+
+    // 隊友標記（薄 demo）
+    if (allyHex) {
+      const { x, y } = axialToPixel(allyHex, HEX_SIZE);
+      const cx = layout.originX + x;
+      const cy = layout.originY + y;
+      ctx.beginPath();
+      ctx.arc(cx, cy, HEX_SIZE * 0.32, 0, Math.PI * 2);
+      ctx.fillStyle = '#3d8a5a';
+      ctx.fill();
+      ctx.strokeStyle = '#b8ffd0';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.fillStyle = '#f0fff5';
+      ctx.font = 'bold 11px "Segoe UI", "Noto Sans TC", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('友', cx, cy);
+    }
+  }, [allyHex, board, hexes, layout, unitHex]);
 
   function handleClick(e: MouseEvent<HTMLCanvasElement>) {
     const canvas = canvasRef.current;
@@ -225,8 +247,8 @@ export function BoardCanvas({ board, unitHex, onHexClick }: BoardCanvasProps) {
     <section className="board-panel" aria-label="六角棋盤">
       <h2>開場棋盤（Canvas）</h2>
       <p className="muted board-hint">
-        半徑 {DEFAULT_MAP_RADIUS} · flat-top · 王 (0,0) · 單位 ({unitHex.q},{unitHex.r}) ·
-        開場牆 {wallCount} 格（{hexKey({ q: 0, r: -1 })} 等）· 點鄰格移動（demo）
+        半徑 {DEFAULT_MAP_RADIUS} · flat-top · 王 (0,0) · 單位 ({unitHex.q},{unitHex.r}){allyHex ? ` · 友 (${allyHex.q},${allyHex.r})` : ''} ·
+        開場牆 {wallCount} 格（{hexKey({ q: 0, r: -1 })} 等）· 點格移動／指定（demo）
       </p>
       <canvas
         ref={canvasRef}

@@ -170,3 +170,17 @@ header h1 {
   cursor: crosshair;
   background: #12141a;
 }
+
+.demo-toggles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem 1rem;
+  align-items: center;
+  font-size: 0.85rem;
+  color: #c9d4ea;
+}
+
+.demo-toggles label {
+  cursor: pointer;
+  user-select: none;
+}

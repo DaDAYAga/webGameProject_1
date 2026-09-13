@@ -1,20 +1,24 @@
 /**
- * 學習筆記：
- * 1) React 元件 = 畫面上一塊（棋盤、手牌、日誌）；狀態用 useState。
- * 2) 點牌 = 呼叫 core resolve*；attacker = 目前 unitHex。
- * 3) 點棋盤 = shortestPath + 本回合最多 2 步；首步成功進 moveLocked，走完才可再出牌。
- * 4) UI 不算規則：傷害／站格／棄牌皆由 core 回傳，這裡只顯示並同步 state。
- * 5) 回合殼（UI-only）：movesLeft／actionsLeft／moveLocked 可調；結束回合重置。
- *    真實 core/turn 命名空間之後再接，此處僅薄 demo 額度。
+ * 學習筆記（新串牌）：
+ * 1) pendingPlay：出牌進入指定模式後，點格完成牌目標（不走移動）；取消鈕可清。
+ * 2) moveLocked 仍擋一切「開始出牌」；大亂流／英勇衝鋒亦同（須走完或未鎖時再出）。
+ * 3) 大招 mayPlayShot：授旗後下一張手上射擊可 ignoreRange 且不另扣行動。
+ * 4) 強制結束回合（聚精／衝鋒／位面／不死）：呼叫同一套 endTurn 重置薄殼額度。
+ * 5) UI 不算規則：路徑／推動／衝鋒／裝填皆由 core resolve* 回傳，這裡只同步 state。
  */
 import { useMemo, useState } from 'react';
 import {
   EMPTY_AMMO_SLOT,
   GUNNER_CARD_DEFS,
   makeGunnerCard,
+  resolveBigShow,
   resolveGunnerShot,
   resolveMischiefBottle,
   resolvePlayfulBottle,
+  resolvePowerUp,
+  resolveTurbulence,
+  TURBULENCE_MAX_BOTTLE_DISCARD,
+  TURBULENCE_MOVE_BASE,
   type AmmoSlotState,
   type GunnerCardId,
   type GunnerCardInstance,
@@ -23,14 +27,25 @@ import {
   MAGE_CARD_DEFS,
   makeMageCard,
   resolveAmplify,
+  resolveBarrier,
+  resolveFocus,
   resolveMagicArrow,
+  resolvePlanarSwap,
+  resolveWindControl,
+  type BarrierAura,
   type MageCardId,
   type MageCardInstance,
 } from '@core/cards/mage/index.js';
 import {
   KNIGHT_CARD_DEFS,
   makeKnightCard,
+  resolveDevotion,
+  resolveFaith,
+  resolveHeroicCharge,
   resolveKnightAttack,
+  resolveTaunt,
+  resolveUndying,
+  type BossPlaceRestriction,
   type KnightCardId,
 } from '@core/cards/knight/index.js';
 import {
@@ -43,24 +58,25 @@ import {
   shortestPath,
   type Board,
 } from '@core/board/index.js';
-import { distance, equals, neighbors, type Axial } from '@core/hex/index.js';
+import {
+  AXIAL_DIRECTIONS,
+  add,
+  distance,
+  equals,
+  neighbors,
+  subtract,
+  type Axial,
+} from '@core/hex/index.js';
 import { BoardCanvas } from './BoardCanvas';
 import { Hand, type HandCard } from './Hand';
 
 type DemoClass = 'gunner' | 'mage' | 'knight';
 
-/**
- * 開場單位位置：距王 2、空格、可站。
- * (2,0) 在開場六鄰牆外，適合遠程甜區示範。
- */
+/** 開場單位：距王 2、空格。 */
 const START_UNIT_HEX: Axial = { q: 2, r: 0 };
+/** 薄 demo 隊友：鄰單位，供奉獻／位面。 */
+const START_ALLY_HEX: Axial = { q: 3, r: -1 };
 
-/**
- * 薄 UI 回合額度（可調常數；非 core/turn）。
- * - movesLeft：本回合移動預算（步數 = path.length - 1）
- * - actionsLeft：countsTowardAction 的成功出牌消耗 1（增幅／氣瓶不計次）
- * - 首步成功後 moveLocked：未走完前禁止一切出牌（計次／不計次皆擋）
- */
 const TURN_MOVES_PER_ROUND = 2;
 const TURN_ACTIONS_PER_ROUND = 1;
 
@@ -69,13 +85,38 @@ const WIRED_IDS = new Set([
   'shot',
   'playful_bottle',
   'mischief_bottle',
+  'turbulence',
+  'power_up',
+  'big_show',
   'magic_arrow',
   'amplify',
+  'wind',
+  'focus',
+  'barrier',
+  'planar_swap',
   'attack',
+  'faith',
+  'heroic_charge',
+  'devotion',
+  'taunt',
+  'undying',
 ]);
 
+/** UI-only 指定模式（2026-09-13j）：點格完成牌，不走移動。 */
+type PendingPlay =
+  | {
+      kind: 'turbulence';
+      card: HandCard;
+      discardBottleIds: string[];
+      steps: number;
+    }
+  | { kind: 'wind_from'; card: HandCard }
+  | { kind: 'wind_to'; card: HandCard; from: Axial }
+  | { kind: 'heroic_charge'; card: HandCard }
+  | { kind: 'undying'; card: HandCard }
+  | { kind: 'devotion'; card: HandCard };
+
 function buildGunnerHand(): HandCard[] {
-  // 多放幾張射擊，氣瓶才能棄射擊裝填
   const ids: GunnerCardId[] = [
     'shot',
     'shot',
@@ -84,6 +125,7 @@ function buildGunnerHand(): HandCard[] {
     'mischief_bottle',
     'turbulence',
     'power_up',
+    'big_show',
   ];
   return ids.map((cardId, i) => {
     const inst = makeGunnerCard(cardId, `g-${i}-${cardId}`);
@@ -105,6 +147,7 @@ function buildMageHand(): HandCard[] {
     'wind',
     'focus',
     'barrier',
+    'planar_swap',
   ];
   return ids.map((cardId, i) => {
     const inst = makeMageCard(cardId, `m-${i}-${cardId}`);
@@ -123,8 +166,10 @@ function buildKnightHand(): HandCard[] {
     'attack',
     'attack',
     'faith',
+    'heroic_charge',
     'taunt',
     'devotion',
+    'undying',
   ];
   return ids.map((cardId, i) => {
     const inst = makeKnightCard(cardId, `k-${i}-${cardId}`);
@@ -162,7 +207,6 @@ function describeHex(board: Board, hex: Axial): string {
   return '空格';
 }
 
-/** HandCard → core 槍手實例（氣瓶／棄牌要 instanceId）。 */
 function toGunnerInstances(hand: HandCard[]): GunnerCardInstance[] {
   return hand.map((c) => {
     const cardId = c.cardId as GunnerCardId;
@@ -174,7 +218,6 @@ function toGunnerInstances(hand: HandCard[]): GunnerCardInstance[] {
   });
 }
 
-/** HandCard → core 法師實例（增幅不棄牌，仍要交 hand）。 */
 function toMageInstances(hand: HandCard[]): MageCardInstance[] {
   return hand.map((c) => {
     const cardId = c.cardId as MageCardId;
@@ -186,14 +229,12 @@ function toMageInstances(hand: HandCard[]): MageCardInstance[] {
   });
 }
 
-/** 氣瓶失敗原因 → 短中文。 */
 function bottleFailReason(reason: string | undefined): string {
   if (reason === 'no_shot_to_discard') return '手牌無射擊可棄';
   if (reason === 'ammo_slot_full') return '裝填槽已滿（合計最多 2）';
   return reason ?? '未知失敗';
 }
 
-/** 依職業定義表查 countsTowardAction（薄殼用；真實 turn 之後再接）。 */
 function lookupCountsTowardAction(demo: DemoClass, cardId: string): boolean {
   if (demo === 'gunner') {
     const def = GUNNER_CARD_DEFS[cardId as GunnerCardId];
@@ -207,34 +248,72 @@ function lookupCountsTowardAction(demo: DemoClass, cardId: string): boolean {
   return def?.countsTowardAction ?? false;
 }
 
-/** 目前格是否還有可站鄰格（續走判定；不含自己）。 */
 function hasStandableNeighbor(board: Board, hex: Axial): boolean {
   return neighbors(hex).some((n) => canStandAt(board, n));
+}
+
+/** 從 from 往 toward 是否在軸向直線；是則回傳單位方向。 */
+function axialDirectionToward(from: Axial, toward: Axial): Axial | null {
+  if (equals(from, toward)) return null;
+  for (const dir of AXIAL_DIRECTIONS) {
+    let cur = from;
+    for (let i = 0; i < 24; i++) {
+      cur = add(cur, dir);
+      if (equals(cur, toward)) return dir;
+    }
+  }
+  return null;
+}
+
+function pendingHint(p: PendingPlay | null): string {
+  if (!p) return '';
+  if (p.kind === 'turbulence') {
+    return `指定大亂流終點（須恰好 ${p.steps} 步；已選棄氣瓶 ${p.discardBottleIds.length}）`;
+  }
+  if (p.kind === 'wind_from') return '指定要推動的地形格';
+  if (p.kind === 'wind_to') {
+    return `指定推動方向：點 (${p.from.q},${p.from.r}) 的鄰格`;
+  }
+  if (p.kind === 'heroic_charge') return '指定衝鋒方向：點直線上任一格（或鄰格）';
+  if (p.kind === 'undying') return '指定復活落點（可站格）';
+  if (p.kind === 'devotion') return '指定鄰 1 隊友格（吸咒）';
+  return '';
 }
 
 export function App() {
   const [demo, setDemo] = useState<DemoClass>('gunner');
   const [unitHex, setUnitHex] = useState<Axial>(START_UNIT_HEX);
-  // 手牌 lift：出牌／氣瓶棄射擊會移除；切 tab 重建
+  const [allyHex, setAllyHex] = useState<Axial>(START_ALLY_HEX);
   const [hand, setHand] = useState<HandCard[]>(() => buildGunnerHand());
-  // 槍手裝填槽（氣瓶寫入、射擊結算清空）
   const [ammo, setAmmo] = useState<AmmoSlotState>(EMPTY_AMMO_SLOT);
-  // 法師增幅：下一張招帶 amplified；薄 demo 只餵給魔法箭
   const [amplifiedPending, setAmplifiedPending] = useState(false);
-  // 騎士拆牆會改盤面 → lift board
   const [board, setBoard] = useState<Board>(() => createOpeningBoard());
   const [log, setLog] = useState<string[]>([
-    '薄 UI：氣瓶／增幅→箭／騎士近戰已串；薄回合殼（移動2／行動1；首步後鎖定出牌至走完）。點「結束回合」重置額度。',
+    '薄 UI：剩餘職業牌已串；指定模式點格完成目標（非移動）。移動鎖仍擋開始出牌。',
   ]);
   const [toast, setToast] = useState('');
-  // 薄回合殼：僅 UI 額度；真實 core/turn 之後再接
   const [round, setRound] = useState(1);
   const [movesLeft, setMovesLeft] = useState(TURN_MOVES_PER_ROUND);
   const [actionsLeft, setActionsLeft] = useState(TURN_ACTIONS_PER_ROUND);
-  // 移動鎖定：本回合首步成功後為 true，走完（花光 2 步或無續走）後解鎖
   const [moveLocked, setMoveLocked] = useState(false);
-  // mustFinishMove 與 moveLocked 同義別名（設計文件用語）
   const mustFinishMove = moveLocked;
+  /** 本回合是否已移動（走路／大亂流／衝鋒）；信仰／大招用。 */
+  const [hasMovedThisTurn, setHasMovedThisTurn] = useState(false);
+  /** 大招授旗：下一張手上射擊 ignoreRange 且不另扣行動。 */
+  const [mayPlayShotIgnoreRange, setMayPlayShotIgnoreRange] = useState(false);
+  const [pendingPlay, setPendingPlay] = useState<PendingPlay | null>(null);
+  /** 法師屏障光環 stub（僅日誌／狀態列）。 */
+  const [barrierAura, setBarrierAura] = useState<BarrierAura | null>(null);
+  /** 騎士詛咒層（信仰／奉獻 demo）。 */
+  const [curseStacks, setCurseStacks] = useState(2);
+  const [allyCurseStacks, setAllyCurseStacks] = useState(1);
+  /** 嘲諷：他人回合開關。 */
+  const [isOthersTurn, setIsOthersTurn] = useState(false);
+  const [tauntRestriction, setTauntRestriction] =
+    useState<BossPlaceRestriction | null>(null);
+  /** 不死存在 demo 旗。 */
+  const [isDead, setIsDead] = useState(false);
+  const [atRoundEndAfterActors, setAtRoundEndAfterActors] = useState(false);
 
   const ammoHint = useMemo(
     () => `裝填 dmg+${ammo.damageBonus} draw+${ammo.drawBonus}`,
@@ -245,7 +324,14 @@ export function App() {
     setLog((prev) => [...prev, line]);
   }
 
-  /** 切職業：重建手牌並清 buff／裝填（棋盤與單位保留；回合額度重置）。 */
+  function clearPending(note?: string) {
+    setPendingPlay(null);
+    if (note) {
+      pushLog(note);
+      setToast(note);
+    }
+  }
+
   function switchDemo(next: DemoClass) {
     setDemo(next);
     setHand(buildHand(next));
@@ -254,56 +340,58 @@ export function App() {
     setMovesLeft(TURN_MOVES_PER_ROUND);
     setActionsLeft(TURN_ACTIONS_PER_ROUND);
     setMoveLocked(false);
-    pushLog(`【切換】→ ${demoLabel(next)}（手牌重建；移動／行動額度重置；移動鎖清除）`);
+    setHasMovedThisTurn(false);
+    setMayPlayShotIgnoreRange(false);
+    setPendingPlay(null);
+    setBarrierAura(null);
+    setTauntRestriction(null);
+    setCurseStacks(2);
+    setAllyCurseStacks(1);
+    setIsOthersTurn(false);
+    setIsDead(false);
+    setAtRoundEndAfterActors(false);
+    setAllyHex(START_ALLY_HEX);
+    pushLog(`【切換】→ ${demoLabel(next)}（手牌重建；額度／鎖／指定清除）`);
     setToast(`切換 ${demoLabel(next)}`);
   }
 
-  /**
-   * 結束回合（UI-only）：重置移動／行動額度、清增幅待用、保留裝填、round++。
-   * 真實老化／抽牌／敵人回合之後再接 core/turn。
-   */
-  function endTurn() {
+  function endTurn(reason = '玩家結束') {
     const nextRound = round + 1;
     setRound(nextRound);
     setMovesLeft(TURN_MOVES_PER_ROUND);
     setActionsLeft(TURN_ACTIONS_PER_ROUND);
     setMoveLocked(false);
+    setHasMovedThisTurn(false);
     setAmplifiedPending(false);
-    // 裝填保留（薄 demo：不清 ammo）
+    setMayPlayShotIgnoreRange(false);
+    setPendingPlay(null);
+    setBarrierAura(null);
+    setTauntRestriction(null);
+    setAtRoundEndAfterActors(false);
     pushLog(
-      `【結束回合】→ round ${nextRound}` +
-        `（移動 ${TURN_MOVES_PER_ROUND}／行動 ${TURN_ACTIONS_PER_ROUND}；移動鎖清除；增幅已清；裝填保留）`,
+      `【結束回合】${reason} → round ${nextRound}` +
+        `（移動 ${TURN_MOVES_PER_ROUND}／行動 ${TURN_ACTIONS_PER_ROUND}；鎖／增幅／大招旗／屏障光環清除）`,
     );
     setToast(
       `第 ${nextRound} 回合：移動 ${TURN_MOVES_PER_ROUND} · 行動 ${TURN_ACTIONS_PER_ROUND}`,
     );
   }
 
-  /** 成功出計次牌後扣 1 行動。 */
   function spendActionIfCounted(cardId: string) {
     if (!lookupCountsTowardAction(demo, cardId)) return;
     setActionsLeft((n) => Math.max(0, n - 1));
   }
 
-  /** 出牌後從手牌移除（成功結算時）。 */
   function removeFromHand(...instanceIds: string[]) {
-    const drop = new Set(instanceIds);
+    const drop = new Set(instanceIds.filter(Boolean));
     setHand((prev) => prev.filter((c) => !drop.has(c.instanceId)));
   }
 
-  /**
-   * Demo 移動（2026-09-13i）：點擊目標格。
-   * - shortestPath(board, unitHex, dest)；步數 = path.length - 1
-   * - 拒絕：null／同格／步數 > 2／步數 > movesLeft
-   * - 1 步：走到鄰格；若尚有剩餘且可續走 → 保持 moveLocked
-   * - 2 步：一次點擊套用兩步到 dest，花光額度後解鎖
-   * - 卡住（無 canStandAt 鄰格）→ 解鎖並日誌「無法續走，解鎖出牌」
-   */
-  function onHexClick(hex: Axial) {
+  /** 走路移動（無 pending 時）。 */
+  function tryMoveTo(hex: Axial) {
     const tileDesc = describeHex(board, hex);
     const base = `【點格】axial=(${hex.q},${hex.r}) key=${hexKey(hex)} → ${tileDesc}`;
 
-    // 同格：略過
     if (equals(hex, unitHex)) {
       pushLog(`${base}（已在此格）`);
       setToast(`單位已在 (${hex.q},${hex.r})`);
@@ -318,7 +406,6 @@ export function App() {
     }
 
     const path = shortestPath(board, unitHex, hex);
-    // 無路徑／目標不可站（牆／王格等）
     if (path === null) {
       const why = equals(hex, BOSS_HEX) ? '不可站王格' : `不可達或不可站：${tileDesc}`;
       pushLog(`${base} → 移動拒絕（${why}）`);
@@ -327,14 +414,12 @@ export function App() {
     }
 
     const steps = path.length - 1;
-    // 路徑含起點：>2 步超出本回合移動上限
     if (steps > TURN_MOVES_PER_ROUND) {
       const msg = `路徑 ${steps} 步，超過本回合上限 ${TURN_MOVES_PER_ROUND}`;
       pushLog(`${base} → ${msg}`);
       setToast(msg);
       return;
     }
-    // 剩餘額度不足：拒絕遠於 movesLeft 的目標（不自動只走第一步）
     if (steps > movesLeft) {
       const msg = `路徑 ${steps} 步，剩餘移動僅 ${movesLeft}`;
       pushLog(`${base} → ${msg}`);
@@ -350,17 +435,15 @@ export function App() {
     const from = unitHex;
     const dest = path[path.length - 1]!;
     setUnitHex(dest);
+    setHasMovedThisTurn(true);
     const left = movesLeft - steps;
     setMovesLeft(left);
 
-    // 首步成功 → 進入移動鎖定；走完或卡住再解鎖
     let nextLocked = true;
     let stuckUnlock = false;
     if (left <= 0) {
-      // 花光本回合移動預算 → 解鎖出牌
       nextLocked = false;
     } else if (!hasStandableNeighbor(board, dest)) {
-      // 尚有額度但無續走鄰格 → 解鎖
       nextLocked = false;
       stuckUnlock = true;
     }
@@ -375,13 +458,11 @@ export function App() {
       : stuckUnlock
         ? ''
         : ' · 移動完成，可出牌';
-    const line =
+    pushLog(
       `【移動】(${from.q},${from.r}) → (${dest.q},${dest.r})` +
-      `（${via} · 剩餘移動 ${left}${lockNote}）`;
-    pushLog(line);
-    if (stuckUnlock) {
-      pushLog('無法續走，解鎖出牌');
-    }
+        `（${via} · 剩餘移動 ${left}${lockNote}）`,
+    );
+    if (stuckUnlock) pushLog('無法續走，解鎖出牌');
     setToast(
       stuckUnlock
         ? `移動到 (${dest.q},${dest.r})；無法續走，解鎖出牌`
@@ -391,11 +472,235 @@ export function App() {
     );
   }
 
+  function completeTurbulence(hex: Axial, pending: Extract<PendingPlay, { kind: 'turbulence' }>) {
+    const full = shortestPath(board, unitHex, hex);
+    if (full === null) {
+      pushLog(`【大亂流】目標不可達／不可站 (${hex.q},${hex.r})`);
+      setToast('大亂流：目標不可達');
+      return;
+    }
+    const pathWithoutStart = full.slice(1);
+    if (pathWithoutStart.length !== pending.steps) {
+      const msg = `路徑 ${pathWithoutStart.length} 步，須恰好 ${pending.steps} 步`;
+      pushLog(`【大亂流】${msg}`);
+      setToast(msg);
+      return;
+    }
+    const result = resolveTurbulence({
+      board,
+      actorPosition: unitHex,
+      hand: toGunnerInstances(hand),
+      discardBottleInstanceIds: pending.discardBottleIds,
+      path: pathWithoutStart,
+    });
+    if (!result.ok) {
+      pushLog(`【大亂流】失敗：${result.reason}`);
+      setToast(`大亂流失敗：${result.reason}`);
+      return;
+    }
+    setUnitHex(result.actorPosition);
+    setHasMovedThisTurn(true);
+    removeFromHand(pending.card.instanceId, ...result.discardedBottleIds);
+    spendActionIfCounted('turbulence');
+    setPendingPlay(null);
+    // 大亂流不算走路額度；不改 movesLeft／moveLocked（仍擋於鎖中開始）
+    pushLog(
+      `【大亂流】→ (${result.actorPosition.q},${result.actorPosition.r})` +
+        ` steps=${result.steps} 棄氣瓶=${result.discardedBottleIds.join(',') || '無'}` +
+        ` / events=${formatEvents(result.events)}`,
+    );
+    setToast(`大亂流：落到 (${result.actorPosition.q},${result.actorPosition.r})`);
+  }
+
+  function completeWindFrom(hex: Axial, card: HandCard) {
+    const tile = getTile(board, hex);
+    if (!tile) {
+      pushLog(`【御風術】(${hex.q},${hex.r}) 無地形可推`);
+      setToast('請點有地形的格');
+      return;
+    }
+    setPendingPlay({ kind: 'wind_to', card, from: hex });
+    pushLog(`【御風術】來源 (${hex.q},${hex.r}) ${tile.kind} → 請點鄰格決定方向`);
+    setToast(`來源 (${hex.q},${hex.r})：點鄰格當方向`);
+  }
+
+  function completeWindTo(hex: Axial, card: HandCard, from: Axial) {
+    if (distance(from, hex) !== 1) {
+      pushLog(`【御風術】方向須為來源鄰格（點了 (${hex.q},${hex.r})）`);
+      setToast('請點來源的鄰格');
+      return;
+    }
+    const direction = subtract(hex, from);
+    const usedAmp = amplifiedPending;
+    const result = resolveWindControl({
+      board,
+      from,
+      direction,
+      amplified: usedAmp,
+      actors: [
+        { id: 'self', hex: unitHex },
+        { id: 'ally', hex: allyHex },
+      ],
+    });
+    if (!result.ok) {
+      pushLog(`【御風術】失敗：${result.reason}`);
+      setToast(`御風失敗：${result.reason}`);
+      return;
+    }
+    setBoard(result.board);
+    setAmplifiedPending(false);
+    removeFromHand(card.instanceId);
+    spendActionIfCounted('wind');
+    setPendingPlay(null);
+    pushLog(
+      `【御風術】(${from.q},${from.r}) → (${result.finalHex?.q},${result.finalHex?.r})` +
+        ` steps=${result.stepsMoved}` +
+        (usedAmp ? '（增幅）' : '') +
+        ` / events=${formatEvents(result.events)}`,
+    );
+    setToast(
+      `御風：推到 (${result.finalHex?.q},${result.finalHex?.r})` +
+        (usedAmp ? '（增幅 2 步）' : ''),
+    );
+  }
+
+  function completeHeroicCharge(hex: Axial, card: HandCard) {
+    const dir = axialDirectionToward(unitHex, hex);
+    if (!dir) {
+      pushLog(`【英勇衝鋒】(${hex.q},${hex.r}) 不在單位軸向直線上`);
+      setToast('請點直線上的格（或鄰格）');
+      return;
+    }
+    // 薄 demo：不傳 units，避免撞隊友落地複雜度；直線衝到邊／硬停
+    const final = resolveHeroicCharge({
+      board,
+      actorPosition: unitHex,
+      direction: dir,
+    });
+    if (!final.ok) {
+      pushLog(`【英勇衝鋒】失敗：${final.reason}`);
+      setToast(`衝鋒失敗：${final.reason}`);
+      setPendingPlay(null);
+      if (final.forceEndTurn) endTurn('英勇衝鋒失敗強制結束');
+      return;
+    }
+    setBoard(final.board);
+    setUnitHex(final.actorPosition);
+    setHasMovedThisTurn(true);
+    removeFromHand(card.instanceId);
+    spendActionIfCounted('heroic_charge');
+    setPendingPlay(null);
+    pushLog(
+      `【英勇衝鋒】→ (${final.actorPosition.q},${final.actorPosition.r})` +
+        ` bossDamage=${final.bossDamage} hitBoss=${final.hitBoss}` +
+        ` / events=${formatEvents(final.events)}`,
+    );
+    setToast(`衝鋒至 (${final.actorPosition.q},${final.actorPosition.r})`);
+    if (final.forceEndTurn) endTurn('英勇衝鋒強制結束');
+  }
+
+  function completeUndying(hex: Axial, card: HandCard) {
+    const result = resolveUndying({
+      board,
+      landingHex: hex,
+      isDead,
+      hasUndyingInHand: hand.some((c) => c.cardId === 'undying'),
+      atRoundEndAfterActors,
+    });
+    if (!result.ok) {
+      pushLog(`【不死存在】失敗：${result.reason}`);
+      setToast(`不死失敗：${result.reason}`);
+      return;
+    }
+    setBoard(result.board);
+    setUnitHex(result.actorPosition!);
+    setIsDead(false);
+    removeFromHand(card.instanceId);
+    setPendingPlay(null);
+    pushLog(
+      `【不死存在】復活於 (${result.actorPosition!.q},${result.actorPosition!.r})` +
+        ` / events=${formatEvents(result.events)}`,
+    );
+    setToast(`復活於 (${result.actorPosition!.q},${result.actorPosition!.r})`);
+    if (result.forceEndTurn) endTurn('不死存在強制結束');
+  }
+
+  function completeDevotion(hex: Axial, card: HandCard) {
+    if (!equals(hex, allyHex)) {
+      pushLog(`【奉獻】請點隊友格 (${allyHex.q},${allyHex.r})`);
+      setToast('請點隊友標記格');
+      return;
+    }
+    const result = resolveDevotion({
+      actorHex: unitHex,
+      allyHex,
+      selfCurseStacks: curseStacks,
+      allyCurseStacks,
+    });
+    if (!result.ok) {
+      pushLog(`【奉獻】失敗：${result.reason}`);
+      setToast(`奉獻失敗：${result.reason}`);
+      setPendingPlay(null);
+      return;
+    }
+    setCurseStacks(result.selfCurseStacks);
+    setAllyCurseStacks(result.allyCurseStacks);
+    removeFromHand(card.instanceId);
+    setPendingPlay(null);
+    pushLog(
+      `【奉獻】自己咒 ${result.selfCurseStacks}／隊友 ${result.allyCurseStacks}` +
+        (result.extractedUndying ? ' · 抽出不死' : '') +
+        ` / events=${formatEvents(result.events)}`,
+    );
+    setToast(
+      `奉獻：自己咒 ${result.selfCurseStacks}` +
+        (result.extractedUndying ? '（抽出不死）' : ''),
+    );
+  }
+
+  function onHexClick(hex: Axial) {
+    // 指定模式優先：完成牌目標，不走移動
+    if (pendingPlay) {
+      if (pendingPlay.kind === 'turbulence') {
+        completeTurbulence(hex, pendingPlay);
+        return;
+      }
+      if (pendingPlay.kind === 'wind_from') {
+        completeWindFrom(hex, pendingPlay.card);
+        return;
+      }
+      if (pendingPlay.kind === 'wind_to') {
+        completeWindTo(hex, pendingPlay.card, pendingPlay.from);
+        return;
+      }
+      if (pendingPlay.kind === 'heroic_charge') {
+        completeHeroicCharge(hex, pendingPlay.card);
+        return;
+      }
+      if (pendingPlay.kind === 'undying') {
+        completeUndying(hex, pendingPlay.card);
+        return;
+      }
+      if (pendingPlay.kind === 'devotion') {
+        completeDevotion(hex, pendingPlay.card);
+        return;
+      }
+    }
+    tryMoveTo(hex);
+  }
+
   function onPlay(card: HandCard) {
     const attacker = unitHex;
     const counts = lookupCountsTowardAction(demo, card.cardId);
+    const bonusShot =
+      card.cardId === 'shot' && mayPlayShotIgnoreRange === true;
 
-    // 移動鎖定中：計次／不計次一律擋，直到走完或卡住解鎖
+    if (pendingPlay) {
+      pushLog(`【${card.name}】請先完成或取消目前指定（${pendingPlay.kind}）`);
+      setToast('請先完成／取消指定');
+      return;
+    }
+
     if (mustFinishMove) {
       const msg = '移動中，請先走完再出牌';
       pushLog(`【${card.name}】→ ${msg}（剩餘移動 ${movesLeft}）`);
@@ -403,39 +708,45 @@ export function App() {
       return;
     }
 
-    // 計次牌且行動額度用完 → 擋（增幅／氣瓶 countsTowardAction=false 不擋）
-    if (counts && actionsLeft <= 0) {
+    // 大招後續射擊不另扣行動額度
+    if (counts && actionsLeft <= 0 && !bonusShot) {
       const msg = '本回合行動已用完';
       pushLog(`【${card.name}】→ ${msg}（點「結束回合」重置）`);
       setToast(msg);
       return;
     }
 
-    // —— 槍手：射擊（吃裝填後清槽）——
+    // —— 槍手：射擊 ——
     if (card.cardId === 'shot') {
       const result = resolveGunnerShot({
         attacker,
         ammo,
+        ignoreRangePenalty: bonusShot,
       });
       setAmmo(result.ammo);
       removeFromHand(card.instanceId);
+      if (bonusShot) {
+        setMayPlayShotIgnoreRange(false);
+      } else {
+        spendActionIfCounted(card.cardId);
+      }
       const line =
         `【射擊】attacker=(${attacker.q},${attacker.r}) → ` +
         `bossDamage=${result.bossDamage}` +
         ` / 甜區=${result.inSweetZone ? '是' : '否'}` +
+        (bonusShot ? ' / 大招 ignoreRange' : '') +
         ` / drawFromAmmo=${result.drawFromAmmo}` +
         ` / events=${formatEvents(result.events)}`;
       pushLog(line);
-      spendActionIfCounted(card.cardId);
       setToast(
         `射擊：王傷 ${result.bossDamage}` +
-          (result.drawFromAmmo > 0 ? `（應抽 ${result.drawFromAmmo}）` : '') +
-          `（剩餘行動 ${counts ? actionsLeft - 1 : actionsLeft}）`,
+          (bonusShot ? '（大招免費射）' : '') +
+          (result.drawFromAmmo > 0 ? `（應抽 ${result.drawFromAmmo}）` : ''),
       );
       return;
     }
 
-    // —— 槍手：頑皮／胡鬧氣瓶（需棄 1 射擊）——
+    // —— 氣瓶 ——
     if (card.cardId === 'playful_bottle' || card.cardId === 'mischief_bottle') {
       const input = { ammo, hand: toGunnerInstances(hand) };
       const result =
@@ -449,15 +760,13 @@ export function App() {
         return;
       }
       setAmmo(result.ammo);
-      // core 已從 hand 棄射擊；氣瓶本身由上層移除
       removeFromHand(card.instanceId, result.discardedShotId ?? '');
-      const line =
+      pushLog(
         `【${card.name}】OK → 裝填 dmg+${result.ammo.damageBonus}` +
-        ` draw+${result.ammo.drawBonus}` +
-        ` / 棄射擊=${result.discardedShotId}` +
-        ` / events=${formatEvents(result.events)}`;
-      // 氣瓶 countsTowardAction=false → 不扣 actionsLeft
-      pushLog(line);
+          ` draw+${result.ammo.drawBonus}` +
+          ` / 棄射擊=${result.discardedShotId}` +
+          ` / events=${formatEvents(result.events)}`,
+      );
       setToast(
         `${card.name}：裝填 dmg+${result.ammo.damageBonus} draw+${result.ammo.drawBonus}` +
           '（不計次）',
@@ -465,22 +774,93 @@ export function App() {
       return;
     }
 
-    // —— 法師：強能增幅（不棄牌；下一招 amplified）——
+    // —— 大亂流：進指定終點 ——
+    if (card.cardId === 'turbulence') {
+      const bottles = hand.filter(
+        (c) =>
+          c.instanceId !== card.instanceId &&
+          (c.cardId === 'playful_bottle' || c.cardId === 'mischief_bottle'),
+      );
+      const discardBottleIds = bottles
+        .slice(0, TURBULENCE_MAX_BOTTLE_DISCARD)
+        .map((c) => c.instanceId);
+      const steps = discardBottleIds.length + TURBULENCE_MOVE_BASE;
+      setPendingPlay({ kind: 'turbulence', card, discardBottleIds, steps });
+      pushLog(
+        `【大亂流】進入指定：將棄氣瓶 ${discardBottleIds.length} 張 → 須走 ${steps} 步；點終點格`,
+      );
+      setToast(`大亂流：點恰好 ${steps} 步的終點`);
+      return;
+    }
+
+    // —— Power UP!!：薄 demo 固定 temp_shot ——
+    if (card.cardId === 'power_up') {
+      const result = resolvePowerUp({
+        mode: 'temp_shot',
+        attacker,
+        ammo,
+      });
+      if (!result.ok) {
+        pushLog(`【Power UP!!】失敗：${result.reason}`);
+        setToast(`Power UP 失敗：${result.reason}`);
+        return;
+      }
+      if (result.ammo) setAmmo(result.ammo);
+      removeFromHand(card.instanceId);
+      spendActionIfCounted(card.cardId);
+      pushLog(
+        `【Power UP!!】temp_shot → bossDamage=${result.bossDamage}` +
+          ` 甜區=${result.inSweetZone ? '是' : '否'}` +
+          ` cannotBottle=${result.cannotBottleImmediately}` +
+          ` / events=${formatEvents(result.events)}`,
+      );
+      setToast(`Power UP 臨時射擊：王傷 ${result.bossDamage ?? 0}`);
+      return;
+    }
+
+    // —— 來吧! 大鬧一場! ——
+    if (card.cardId === 'big_show') {
+      const result = resolveBigShow({
+        hasMovedThisTurn,
+        ammo,
+      });
+      if (!result.ok) {
+        pushLog(`【來吧! 大鬧一場!】失敗：${result.reason}`);
+        setToast(`大招失敗：${result.reason}`);
+        return;
+      }
+      setAmmo(result.ammo);
+      setMayPlayShotIgnoreRange(result.mayPlayShot && result.ignoreRangePenaltyForShot);
+      removeFromHand(card.instanceId);
+      spendActionIfCounted(card.cardId);
+      pushLog(
+        `【來吧! 大鬧一場!】OK 裝填 dmg+${result.ammo.damageBonus}` +
+          ` draw+${result.ammo.drawBonus}` +
+          ` mayPlayShot=${result.mayPlayShot}` +
+          ` ignoreRange=${result.ignoreRangePenaltyForShot}` +
+          ` / events=${formatEvents(result.events)}`,
+      );
+      setToast(
+        result.mayPlayShot
+          ? '大招成功：請再打 1 張手上射擊（無視距離、不另扣行動）'
+          : '大招成功',
+      );
+      return;
+    }
+
+    // —— 強能增幅 ——
     if (card.cardId === 'amplify') {
       const result = resolveAmplify({ hand: toMageInstances(hand) });
       setAmplifiedPending(result.amplifiedPending);
       removeFromHand(card.instanceId);
-      // 增幅 countsTowardAction=false → 不扣 actionsLeft
       pushLog(
-        `【強能增幅】armed → 下一張招 amplified` +
-          ` / events=${formatEvents(result.events)}` +
-          '（不計次）',
+        `【強能增幅】armed → 下一張招 amplified / events=${formatEvents(result.events)}（不計次）`,
       );
-      setToast('強能增幅：下一張魔法箭會吃加成（不計次）');
+      setToast('強能增幅：下一招吃加成（不計次）');
       return;
     }
 
-    // —— 法師：魔法箭（吃 amplifiedPending 後清旗）——
+    // —— 魔法箭 ——
     if (card.cardId === 'magic_arrow') {
       const usedAmp = amplifiedPending;
       const result = resolveMagicArrow({
@@ -489,29 +869,111 @@ export function App() {
       });
       setAmplifiedPending(false);
       removeFromHand(card.instanceId);
-      const line =
-        `【魔法箭】attacker=(${attacker.q},${attacker.r}) → ` +
-        `bossDamage=${result.bossDamage}` +
-        ` / 甜區=${result.inSweetZone ? '是' : '否'}` +
-        ` / amplified=${result.amplified ? '是' : '否'}` +
-        ` / events=${formatEvents(result.events)}`;
-      pushLog(line);
       spendActionIfCounted(card.cardId);
+      pushLog(
+        `【魔法箭】attacker=(${attacker.q},${attacker.r}) → ` +
+          `bossDamage=${result.bossDamage}` +
+          ` / 甜區=${result.inSweetZone ? '是' : '否'}` +
+          ` / amplified=${result.amplified ? '是' : '否'}` +
+          ` / events=${formatEvents(result.events)}`,
+      );
       setToast(
-        `魔法箭：王傷 ${result.bossDamage}` +
-          (usedAmp ? '（已增幅）' : '') +
-          `（剩餘行動 ${counts ? actionsLeft - 1 : actionsLeft}）`,
+        `魔法箭：王傷 ${result.bossDamage}` + (usedAmp ? '（已增幅）' : ''),
       );
       return;
     }
 
-    // —— 騎士：攻擊（鄰王打王；否則打鄰格可拆牆）——
+    // —— 御風術 ——
+    if (card.cardId === 'wind') {
+      setPendingPlay({ kind: 'wind_from', card });
+      pushLog('【御風術】請點要推動的地形格，再點鄰格決定方向');
+      setToast('御風：先點地形，再點鄰格方向');
+      return;
+    }
+
+    // —— 聚精會神 ——
+    if (card.cardId === 'focus') {
+      const usedAmp = amplifiedPending;
+      const result = resolveFocus({ amplified: usedAmp });
+      setAmplifiedPending(false);
+      removeFromHand(card.instanceId);
+      // 不計次；抽牌 stub
+      pushLog(
+        `【聚精會神】應抽 ${result.drawCount}` +
+          (usedAmp ? '（增幅）' : '') +
+          ` endTurn=${result.endTurn}` +
+          ` / events=${formatEvents(result.events)}（抽牌 stub：僅日誌）`,
+      );
+      setToast(`聚精：應抽 ${result.drawCount}（強制結束回合）`);
+      if (result.endTurn) endTurn('聚精會神強制結束');
+      return;
+    }
+
+    // —— 磁力屏障（薄：只套自己；增幅寄出略過）——
+    if (card.cardId === 'barrier') {
+      if (amplifiedPending) {
+        pushLog('【磁力屏障】增幅寄出需其他單位目標 → 薄 demo 略過增幅，改套自己');
+        setAmplifiedPending(false);
+      }
+      const result = resolveBarrier({
+        mageHex: unitHex,
+        mageId: 'self',
+        amplified: false,
+      });
+      if (!result.ok) {
+        pushLog(`【磁力屏障】失敗：${result.reason}`);
+        setToast(`屏障失敗：${result.reason}`);
+        return;
+      }
+      setBarrierAura(result.aura ?? null);
+      removeFromHand(card.instanceId);
+      spendActionIfCounted(card.cardId);
+      pushLog(
+        `【磁力屏障】保護 ${result.aura?.targetActorId}` +
+          ` 鄰格 ${result.aura?.protectedHexes.length ?? 0}` +
+          ` 下回合擋屏障=${result.barrierBlockedNextTurn}` +
+          ` / events=${formatEvents(result.events)}`,
+      );
+      setToast('屏障：本輪保護自己鄰 1（光環 stub）');
+      return;
+    }
+
+    // —— 位面調換（兩單位 demo：自己 ↔ 隊友）——
+    if (card.cardId === 'planar_swap') {
+      const usedAmp = amplifiedPending;
+      const result = resolvePlanarSwap({
+        board,
+        mageHex: unitHex,
+        actorA: { id: 'self', hex: unitHex },
+        actorB: { id: 'ally', hex: allyHex },
+        amplified: usedAmp,
+      });
+      setAmplifiedPending(false);
+      if (!result.ok) {
+        pushLog(`【位面調換】失敗：${result.reason}（若場上僅一單位則無法 demo）`);
+        setToast(`位面失敗：${result.reason}`);
+        return;
+      }
+      const pos = result.positions;
+      if (pos?.self) setUnitHex(pos.self);
+      if (pos?.ally) setAllyHex(pos.ally);
+      removeFromHand(card.instanceId);
+      pushLog(
+        `【位面調換】自己↔隊友` +
+          (usedAmp ? '（增幅不受沉默）' : '') +
+          ` / events=${formatEvents(result.events)}`,
+      );
+      setToast('位面：已交換自己與隊友');
+      if (result.endTurn) endTurn('位面調換強制結束');
+      return;
+    }
+
+    // —— 騎士攻擊 ——
     if (card.cardId === 'attack') {
       let target: Axial | undefined;
       if (distance(attacker, BOSS_HEX) === 1) {
         target = BOSS_HEX;
       } else {
-        // 薄 UI：自動選單位鄰格第一塊可拆牆
         target = neighbors(attacker).find((h) => {
           const tile = getTile(board, h);
           return tile !== undefined && kindAllowsCrack(tile.kind);
@@ -530,32 +992,105 @@ export function App() {
         attacker,
         target,
       });
-      if (result.board !== board) {
-        setBoard(result.board);
-      }
+      if (result.board !== board) setBoard(result.board);
       removeFromHand(card.instanceId);
       spendActionIfCounted(card.cardId);
       const tgtDesc = equals(target, BOSS_HEX)
         ? '王'
         : `牆(${target.q},${target.r})`;
-      const adjNote =
-        equals(target, BOSS_HEX) && result.reason === 'not_adjacent'
-          ? ' / 非鄰王→0傷'
-          : '';
-      const line =
+      pushLog(
         `【攻擊】→ ${tgtDesc}` +
-        ` bossDamage=${result.bossDamage}` +
-        ` ok=${result.ok}` +
-        (result.reason ? ` reason=${result.reason}` : '') +
-        adjNote +
-        ` / events=${formatEvents(result.events)}`;
-      pushLog(line);
+          ` bossDamage=${result.bossDamage}` +
+          ` ok=${result.ok}` +
+          (result.reason ? ` reason=${result.reason}` : '') +
+          ` / events=${formatEvents(result.events)}`,
+      );
       setToast(
         result.ok
-          ? `攻擊 ${tgtDesc}：王傷 ${result.bossDamage}` +
-            `（剩餘行動 ${counts ? actionsLeft - 1 : actionsLeft}）`
+          ? `攻擊 ${tgtDesc}：王傷 ${result.bossDamage}`
           : `攻擊失敗：${result.reason ?? '未知'}`,
       );
+      return;
+    }
+
+    // —— 堅定信仰 ——
+    if (card.cardId === 'faith') {
+      const result = resolveFaith({
+        hasMovedThisTurn,
+        curseStacks,
+      });
+      if (!result.ok) {
+        pushLog(`【堅定信仰】失敗：${result.reason}`);
+        setToast(`信仰失敗：${result.reason}`);
+        return;
+      }
+      setCurseStacks(result.curseStacks);
+      removeFromHand(card.instanceId);
+      spendActionIfCounted(card.cardId);
+      pushLog(
+        `【堅定信仰】清 ${result.cleared} → 咒層 ${result.curseStacks}` +
+          ` / events=${formatEvents(result.events)}`,
+      );
+      setToast(`信仰：詛咒 ${curseStacks} → ${result.curseStacks}`);
+      return;
+    }
+
+    // —— 英勇衝鋒 ——
+    if (card.cardId === 'heroic_charge') {
+      setPendingPlay({ kind: 'heroic_charge', card });
+      pushLog('【英勇衝鋒】請點軸向直線上的格以決定方向');
+      setToast('衝鋒：點直線方向格');
+      return;
+    }
+
+    // —— 奉獻 ——
+    if (card.cardId === 'devotion') {
+      if (distance(unitHex, allyHex) === 1) {
+        completeDevotion(allyHex, card);
+        return;
+      }
+      setPendingPlay({ kind: 'devotion', card });
+      pushLog(`【奉獻】隊友不鄰：請點隊友格 (${allyHex.q},${allyHex.r})（或先走近）`);
+      setToast('奉獻：點隊友格');
+      return;
+    }
+
+    // —— 嘲諷 ——
+    if (card.cardId === 'taunt') {
+      const result = resolveTaunt({
+        isOthersTurn,
+        knightHex: unitHex,
+        existingBarrier: barrierAura
+          ? { priority: barrierAura.priority, targetHex: barrierAura.targetHex }
+          : null,
+      });
+      if (!result.ok) {
+        pushLog(
+          `【嘲諷】失敗：${result.reason}` +
+            '（可開「他人回合」開關再試）',
+        );
+        setToast(`嘲諷失敗：${result.reason}`);
+        return;
+      }
+      setTauntRestriction(result.bossPlaceRestriction ?? null);
+      removeFromHand(card.instanceId);
+      pushLog(
+        `【嘲諷】中心 (${unitHex.q},${unitHex.r}) ring=1` +
+          ` priority=${result.tauntPriority}` +
+          ` overridesBarrier=${result.overridesBarrier}` +
+          ` / events=${formatEvents(result.events)}`,
+      );
+      setToast('嘲諷：王不可在鄰 1 鋪牆（限制 stub）');
+      return;
+    }
+
+    // —— 不死存在 ——
+    if (card.cardId === 'undying') {
+      setPendingPlay({ kind: 'undying', card });
+      pushLog(
+        `【不死存在】請點復活落點（isDead=${isDead} atRoundEnd=${atRoundEndAfterActors}）`,
+      );
+      setToast('不死：點落點（須勾死亡＋輪末）');
       return;
     }
 
@@ -569,12 +1104,17 @@ export function App() {
       <header>
         <h1>薄 UI（棋盤移動 + 手牌 demo）</h1>
         <p className="muted">
-          氣瓶棄射擊裝填、增幅餵下一箭、騎士鄰王／鄰牆近戰；薄回合殼（每回合移動 2
-          步；首步後鎖定出牌至走完）。真實 core/turn 之後再接。
+          剩餘職業牌已串；有 pending 時點格＝牌目標（非移動）。移動鎖仍擋開始出牌。
+          大亂流／衝鋒須未鎖時發動。
         </p>
       </header>
 
-      <BoardCanvas board={board} unitHex={unitHex} onHexClick={onHexClick} />
+      <BoardCanvas
+        board={board}
+        unitHex={unitHex}
+        allyHex={allyHex}
+        onHexClick={onHexClick}
+      />
 
       <div>
         <span className="tab">
@@ -583,9 +1123,17 @@ export function App() {
           {' · '}移動 {movesLeft}/{TURN_MOVES_PER_ROUND}
           {' · '}行動 {actionsLeft}/{TURN_ACTIONS_PER_ROUND}
           {moveLocked ? ' · 移動鎖定' : ''}
+          {hasMovedThisTurn ? ' · 已移動' : ''}
+          {mayPlayShotIgnoreRange ? ' · 大招可射' : ''}
           {' · '}單位 ({unitHex.q},{unitHex.r})
           {demo === 'gunner' ? ` · ${ammoHint}` : ''}
           {demo === 'mage' && amplifiedPending ? ' · 增幅待用' : ''}
+          {demo === 'mage' && barrierAura ? ' · 屏障中' : ''}
+          {demo === 'knight'
+            ? ` · 咒${curseStacks}/友${allyCurseStacks}`
+            : ''}
+          {tauntRestriction ? ' · 嘲諷中' : ''}
+          {pendingPlay ? ` · 指定:${pendingPlay.kind}` : ''}
         </span>{' '}
         <button type="button" onClick={() => switchDemo('gunner')}>
           槍手
@@ -596,10 +1144,71 @@ export function App() {
         <button type="button" onClick={() => switchDemo('knight')}>
           騎士
         </button>{' '}
-        <button type="button" onClick={endTurn}>
+        <button type="button" onClick={() => endTurn('玩家結束')}>
           結束回合
-        </button>
+        </button>{' '}
+        {pendingPlay ? (
+          <button
+            type="button"
+            onClick={() => clearPending('【取消指定】已清除 pendingPlay')}
+          >
+            取消指定
+          </button>
+        ) : null}
       </div>
+
+      {pendingPlay ? (
+        <p className="muted" role="status">
+          {pendingHint(pendingPlay)}
+        </p>
+      ) : null}
+
+      {demo === 'knight' ? (
+        <div className="demo-toggles">
+          <label>
+            <input
+              type="checkbox"
+              checked={isOthersTurn}
+              onChange={(e) => setIsOthersTurn(e.target.checked)}
+            />{' '}
+            他人回合（嘲諷）
+          </label>{' '}
+          <label>
+            <input
+              type="checkbox"
+              checked={isDead}
+              onChange={(e) => setIsDead(e.target.checked)}
+            />{' '}
+            已死亡（不死）
+          </label>{' '}
+          <label>
+            <input
+              type="checkbox"
+              checked={atRoundEndAfterActors}
+              onChange={(e) => setAtRoundEndAfterActors(e.target.checked)}
+            />{' '}
+            輪末可行動者皆結束（不死）
+          </label>{' '}
+          <button
+            type="button"
+            onClick={() => {
+              setCurseStacks((n) => n + 1);
+              pushLog('【demo】自己詛咒 +1');
+            }}
+          >
+            自己+咒
+          </button>{' '}
+          <button
+            type="button"
+            onClick={() => {
+              setAllyCurseStacks((n) => n + 1);
+              pushLog('【demo】隊友詛咒 +1');
+            }}
+          >
+            隊友+咒
+          </button>
+        </div>
+      ) : null}
 
       <Hand cards={hand} onPlay={onPlay} />
 

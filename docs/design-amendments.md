@@ -269,3 +269,33 @@
 - 可走範圍高亮（本鎖定可選略過）
 - 是否與真實 `core/turn` 移動點對接
 
+---
+
+## 2026-09-13j — 薄 UI 牌目標指定（pendingPlay）（鎖定）
+
+> 來源：人類任務「wire remaining class cards」；**UI-only** 指定慣例，不改 core 結算。
+
+### 定案
+
+1. **`pendingPlay`**：出牌進入指定模式後，`onHexClick` **優先完成牌目標**，不走移動。
+2. **取消**：提供「取消指定」清除 pending；切職業／結束回合亦清。
+3. **與 moveLocked**：鎖定期間仍**不可開始出牌**（含大亂流／英勇衝鋒）。可於首步前或走完 2 步後發動。
+4. **各牌指定**  
+   - 大亂流：自動棄最多 2 氣瓶 → 點恰好 N 步終點（`shortestPath` → path 不含起點交給 `resolveTurbulence`）  
+   - 御風：先點地形來源 → 再點鄰格當方向  
+   - 英勇衝鋒：點軸向直線上任一格決定方向 → `resolveHeroicCharge`  
+   - 不死存在：點可站落點（須 demo 旗 isDead + atRoundEnd）  
+   - 奉獻：隊友鄰 1 則直接結算，否則點隊友格
+5. **大招後續射擊**：`mayPlayShot` 授旗後，下一張手上射擊可 `ignoreRangePenalty` 且**不另扣** actionsLeft。
+6. **強制結束**：聚精／衝鋒／位面／不死成功（或衝鋒失敗且 forceEndTurn）→ 呼叫同一套薄殼 `endTurn`。
+
+### 給 bot（禁改）
+
+- 不要在 moveLocked 中放行一般出牌
+- 不要把 pending 點格誤當成走路移動
+- 不要改 core resolve* 簽名來遷就 UI
+
+### 未定
+
+- 可走／可指定範圍高亮
+- Power UP dig_shots 模式（薄 demo 目前固定 temp_shot）
