@@ -2,9 +2,9 @@
  * 學習筆記：
  * 1) React 元件 = 畫面上一塊（棋盤、手牌、日誌）；狀態用 useState。
  * 2) 點牌 = 呼叫 core resolve*；attacker = 目前 unitHex。
- * 3) 點棋盤 = demo 移動：只能走到「鄰格且 canStandAt」。
+ * 3) 點棋盤 = shortestPath + 本回合最多 2 步；首步成功進 moveLocked，走完才可再出牌。
  * 4) UI 不算規則：傷害／站格／棄牌皆由 core 回傳，這裡只顯示並同步 state。
- * 5) 回合殼（UI-only）：movesLeft／actionsLeft 常數可調；結束回合重置。
+ * 5) 回合殼（UI-only）：movesLeft／actionsLeft／moveLocked 可調；結束回合重置。
  *    真實 core/turn 命名空間之後再接，此處僅薄 demo 額度。
  */
 import { useMemo, useState } from 'react';
@@ -40,6 +40,7 @@ import {
   getTile,
   hexKey,
   kindAllowsCrack,
+  shortestPath,
   type Board,
 } from '@core/board/index.js';
 import { distance, equals, neighbors, type Axial } from '@core/hex/index.js';
@@ -56,10 +57,11 @@ const START_UNIT_HEX: Axial = { q: 2, r: 0 };
 
 /**
  * 薄 UI 回合額度（可調常數；非 core/turn）。
- * - movesLeft：鄰格移動消耗 1
+ * - movesLeft：本回合移動預算（步數 = path.length - 1）
  * - actionsLeft：countsTowardAction 的成功出牌消耗 1（增幅／氣瓶不計次）
+ * - 首步成功後 moveLocked：未走完前禁止一切出牌（計次／不計次皆擋）
  */
-const TURN_MOVES_PER_ROUND = 1;
+const TURN_MOVES_PER_ROUND = 2;
 const TURN_ACTIONS_PER_ROUND = 1;
 
 /** 已串結算的牌種（薄 demo）。 */
@@ -205,6 +207,11 @@ function lookupCountsTowardAction(demo: DemoClass, cardId: string): boolean {
   return def?.countsTowardAction ?? false;
 }
 
+/** 目前格是否還有可站鄰格（續走判定；不含自己）。 */
+function hasStandableNeighbor(board: Board, hex: Axial): boolean {
+  return neighbors(hex).some((n) => canStandAt(board, n));
+}
+
 export function App() {
   const [demo, setDemo] = useState<DemoClass>('gunner');
   const [unitHex, setUnitHex] = useState<Axial>(START_UNIT_HEX);
@@ -217,13 +224,17 @@ export function App() {
   // 騎士拆牆會改盤面 → lift board
   const [board, setBoard] = useState<Board>(() => createOpeningBoard());
   const [log, setLog] = useState<string[]>([
-    '薄 UI：氣瓶／增幅→箭／騎士近戰已串；薄回合殼（移動1／行動1）。點「結束回合」重置額度。',
+    '薄 UI：氣瓶／增幅→箭／騎士近戰已串；薄回合殼（移動2／行動1；首步後鎖定出牌至走完）。點「結束回合」重置額度。',
   ]);
   const [toast, setToast] = useState('');
   // 薄回合殼：僅 UI 額度；真實 core/turn 之後再接
   const [round, setRound] = useState(1);
   const [movesLeft, setMovesLeft] = useState(TURN_MOVES_PER_ROUND);
   const [actionsLeft, setActionsLeft] = useState(TURN_ACTIONS_PER_ROUND);
+  // 移動鎖定：本回合首步成功後為 true，走完（花光 2 步或無續走）後解鎖
+  const [moveLocked, setMoveLocked] = useState(false);
+  // mustFinishMove 與 moveLocked 同義別名（設計文件用語）
+  const mustFinishMove = moveLocked;
 
   const ammoHint = useMemo(
     () => `裝填 dmg+${ammo.damageBonus} draw+${ammo.drawBonus}`,
@@ -242,7 +253,8 @@ export function App() {
     setAmplifiedPending(false);
     setMovesLeft(TURN_MOVES_PER_ROUND);
     setActionsLeft(TURN_ACTIONS_PER_ROUND);
-    pushLog(`【切換】→ ${demoLabel(next)}（手牌重建；移動／行動額度重置）`);
+    setMoveLocked(false);
+    pushLog(`【切換】→ ${demoLabel(next)}（手牌重建；移動／行動額度重置；移動鎖清除）`);
     setToast(`切換 ${demoLabel(next)}`);
   }
 
@@ -255,11 +267,12 @@ export function App() {
     setRound(nextRound);
     setMovesLeft(TURN_MOVES_PER_ROUND);
     setActionsLeft(TURN_ACTIONS_PER_ROUND);
+    setMoveLocked(false);
     setAmplifiedPending(false);
     // 裝填保留（薄 demo：不清 ammo）
     pushLog(
       `【結束回合】→ round ${nextRound}` +
-        `（移動 ${TURN_MOVES_PER_ROUND}／行動 ${TURN_ACTIONS_PER_ROUND}；增幅已清；裝填保留）`,
+        `（移動 ${TURN_MOVES_PER_ROUND}／行動 ${TURN_ACTIONS_PER_ROUND}；移動鎖清除；增幅已清；裝填保留）`,
     );
     setToast(
       `第 ${nextRound} 回合：移動 ${TURN_MOVES_PER_ROUND} · 行動 ${TURN_ACTIONS_PER_ROUND}`,
@@ -279,16 +292,18 @@ export function App() {
   }
 
   /**
-   * Demo 移動：點擊目標格。
-   * - 同格：略過
-   * - 非鄰格：日誌「此 demo 一次只走鄰格」
-   * - 鄰格但 !canStandAt：拒絕
-   * - 鄰格且可站：更新 unitHex
+   * Demo 移動（2026-09-13i）：點擊目標格。
+   * - shortestPath(board, unitHex, dest)；步數 = path.length - 1
+   * - 拒絕：null／同格／步數 > 2／步數 > movesLeft
+   * - 1 步：走到鄰格；若尚有剩餘且可續走 → 保持 moveLocked
+   * - 2 步：一次點擊套用兩步到 dest，花光額度後解鎖
+   * - 卡住（無 canStandAt 鄰格）→ 解鎖並日誌「無法續走，解鎖出牌」
    */
   function onHexClick(hex: Axial) {
     const tileDesc = describeHex(board, hex);
     const base = `【點格】axial=(${hex.q},${hex.r}) key=${hexKey(hex)} → ${tileDesc}`;
 
+    // 同格：略過
     if (equals(hex, unitHex)) {
       pushLog(`${base}（已在此格）`);
       setToast(`單位已在 (${hex.q},${hex.r})`);
@@ -302,35 +317,91 @@ export function App() {
       return;
     }
 
-    const step = distance(unitHex, hex);
-    if (step !== 1) {
-      const msg = '此 demo 一次只走鄰格';
-      pushLog(`${base} → ${msg}（距離 ${step}；非真實 AP／路徑）`);
-      setToast(msg);
-      return;
-    }
-
-    if (!canStandAt(board, hex)) {
-      const why = equals(hex, BOSS_HEX) ? '不可站王格' : `不可站：${tileDesc}`;
+    const path = shortestPath(board, unitHex, hex);
+    // 無路徑／目標不可站（牆／王格等）
+    if (path === null) {
+      const why = equals(hex, BOSS_HEX) ? '不可站王格' : `不可達或不可站：${tileDesc}`;
       pushLog(`${base} → 移動拒絕（${why}）`);
       setToast(`無法移動：${why}`);
       return;
     }
 
+    const steps = path.length - 1;
+    // 路徑含起點：>2 步超出本回合移動上限
+    if (steps > TURN_MOVES_PER_ROUND) {
+      const msg = `路徑 ${steps} 步，超過本回合上限 ${TURN_MOVES_PER_ROUND}`;
+      pushLog(`${base} → ${msg}`);
+      setToast(msg);
+      return;
+    }
+    // 剩餘額度不足：拒絕遠於 movesLeft 的目標（不自動只走第一步）
+    if (steps > movesLeft) {
+      const msg = `路徑 ${steps} 步，剩餘移動僅 ${movesLeft}`;
+      pushLog(`${base} → ${msg}`);
+      setToast(msg);
+      return;
+    }
+    if (steps < 1) {
+      pushLog(`${base}（已在此格）`);
+      setToast(`單位已在 (${hex.q},${hex.r})`);
+      return;
+    }
+
     const from = unitHex;
-    setUnitHex(hex);
-    setMovesLeft((n) => Math.max(0, n - 1));
-    const left = movesLeft - 1;
+    const dest = path[path.length - 1]!;
+    setUnitHex(dest);
+    const left = movesLeft - steps;
+    setMovesLeft(left);
+
+    // 首步成功 → 進入移動鎖定；走完或卡住再解鎖
+    let nextLocked = true;
+    let stuckUnlock = false;
+    if (left <= 0) {
+      // 花光本回合移動預算 → 解鎖出牌
+      nextLocked = false;
+    } else if (!hasStandableNeighbor(board, dest)) {
+      // 尚有額度但無續走鄰格 → 解鎖
+      nextLocked = false;
+      stuckUnlock = true;
+    }
+    setMoveLocked(nextLocked);
+
+    const via =
+      steps === 2
+        ? `經 (${path[1]!.q},${path[1]!.r}) 兩步一次套用`
+        : '一步';
+    const lockNote = nextLocked
+      ? ' · 移動鎖定中（須走完才可出牌）'
+      : stuckUnlock
+        ? ''
+        : ' · 移動完成，可出牌';
     const line =
-      `【移動】(${from.q},${from.r}) → (${hex.q},${hex.r})` +
-      `（鄰格一步 · canStandAt OK · 剩餘移動 ${left}）`;
+      `【移動】(${from.q},${from.r}) → (${dest.q},${dest.r})` +
+      `（${via} · 剩餘移動 ${left}${lockNote}）`;
     pushLog(line);
-    setToast(`移動到 (${hex.q},${hex.r})（剩餘移動 ${left}）`);
+    if (stuckUnlock) {
+      pushLog('無法續走，解鎖出牌');
+    }
+    setToast(
+      stuckUnlock
+        ? `移動到 (${dest.q},${dest.r})；無法續走，解鎖出牌`
+        : `移動到 (${dest.q},${dest.r})（剩餘移動 ${left}` +
+            (nextLocked ? '；鎖定出牌' : '；可出牌') +
+            '）',
+    );
   }
 
   function onPlay(card: HandCard) {
     const attacker = unitHex;
     const counts = lookupCountsTowardAction(demo, card.cardId);
+
+    // 移動鎖定中：計次／不計次一律擋，直到走完或卡住解鎖
+    if (mustFinishMove) {
+      const msg = '移動中，請先走完再出牌';
+      pushLog(`【${card.name}】→ ${msg}（剩餘移動 ${movesLeft}）`);
+      setToast(msg);
+      return;
+    }
 
     // 計次牌且行動額度用完 → 擋（增幅／氣瓶 countsTowardAction=false 不擋）
     if (counts && actionsLeft <= 0) {
@@ -498,8 +569,8 @@ export function App() {
       <header>
         <h1>薄 UI（棋盤移動 + 手牌 demo）</h1>
         <p className="muted">
-          氣瓶棄射擊裝填、增幅餵下一箭、騎士鄰王／鄰牆近戰；薄回合殼（移動／行動額度）。
-          真實 core/turn 之後再接。
+          氣瓶棄射擊裝填、增幅餵下一箭、騎士鄰王／鄰牆近戰；薄回合殼（每回合移動 2
+          步；首步後鎖定出牌至走完）。真實 core/turn 之後再接。
         </p>
       </header>
 
@@ -511,6 +582,7 @@ export function App() {
           {' · '}round {round}
           {' · '}移動 {movesLeft}/{TURN_MOVES_PER_ROUND}
           {' · '}行動 {actionsLeft}/{TURN_ACTIONS_PER_ROUND}
+          {moveLocked ? ' · 移動鎖定' : ''}
           {' · '}單位 ({unitHex.q},{unitHex.r})
           {demo === 'gunner' ? ` · ${ammoHint}` : ''}
           {demo === 'mage' && amplifiedPending ? ' · 增幅待用' : ''}

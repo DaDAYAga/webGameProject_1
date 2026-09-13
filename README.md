@@ -87,12 +87,12 @@
 
 不含牌庫 UI、React。
 
-### ui/（薄手牌 + 六角 Canvas 棋盤 + 單位移動）
+### ui/（薄手牌 + 六角 Canvas 棋盤 + 兩步移動鎖定）
 
 Vite + React + TS：
 - **BoardCanvas**：flat-top 六角網；王 + 開場牆；畫單位「我」標記（`unitHex`）
-- **移動 demo**：點鄰格且 `canStandAt` → 更新位置；牆／王格拒絕；遠格日誌「此 demo 一次只走鄰格」（非真實 AP／A*）
-- 槍手／法師手牌；**射擊**／**魔法箭**以目前 `unitHex` 為 attacker（不再 hardcode）
+- **移動 demo（2026-09-13i）**：`shortestPath` + 每回合最多 2 步；首步成功進 `moveLocked`（擋一切出牌）至走完或卡住解鎖；牆／王格不可站
+- 槍手／法師／騎士手牌；**射擊**／**魔法箭**／氣瓶／增幅／近戰以目前 `unitHex` 為 attacker
 - core 仍純 TS、無 React import
 
 ## 如何跑測試
@@ -105,10 +105,10 @@ npm test
 npx vitest run
 ```
 
-## 薄 UI：手牌 + 棋盤 Canvas + 單位移動（完成）
+## 薄 UI：手牌 + 棋盤 Canvas + 兩步移動鎖定（完成）
 
-`ui/` 為 Vite + React + TypeScript 薄殼：開場六角棋盤、單位一步鄰格移動、硬編碼手牌、點牌呼叫 core、事件日誌。
-不含牌庫組建、AI、完整對局 loop、真實 AP／路徑尋路。
+`ui/` 為 Vite + React + TypeScript 薄殼：開場六角棋盤、每回合最多 2 步（`shortestPath`）、首步後鎖定出牌至走完、硬編碼手牌、點牌呼叫 core、事件日誌。
+不含牌庫組建、AI、完整對局 loop；路徑用 `core/board.shortestPath`（非獨立 A*）。
 
 ```bash
 npm install
@@ -116,12 +116,12 @@ npm run dev    # Vite，預設 http://localhost:5173
 npm run build  # 輸出 dist-ui/
 ```
 
-試玩：開 `npm run dev` → 點單位鄰近空格移動 → 點「射擊」或「魔法箭」看 attacker 隨單位格變；點牆／王格／遠格看日誌拒絕。
+試玩：開 `npm run dev` → 可先出牌 → 點 1～2 步可站格移動（首步後不可出牌）→ 走完 2 步或卡住後再出牌 →「結束回合」重置移動 2／清鎖。點牆／王格／>2 步路徑看日誌拒絕。
 
 學習入口：
 1. `ui/src/BoardCanvas.tsx` — axial↔像素、開場牆、單位標記
-2. `ui/src/App.tsx` — 鄰格移動 + `canStandAt`；點牌 → core（attacker = unitHex）
+2. `ui/src/App.tsx` — `shortestPath` + `moveLocked`；點牌 → core（attacker = unitHex）
 
 ## 下一步
 
-**balance 控制台**、騎士近戰 tab（僅鄰王可打）、或真實 AP／多步移動（handoff 後續）。不要一次做完整牌庫／AI／對局 loop。
+**balance 控制台**、可走範圍高亮、或接真實 `core/turn` 移動點。不要一次做完整牌庫／AI／對局 loop。
