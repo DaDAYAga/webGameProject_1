@@ -7,9 +7,9 @@ import {
   AMMO_SLOT_MAX_TOTAL,
   BIG_SHOW_FREE_DAMAGE,
   BIG_SHOW_FREE_DRAW,
+  BIG_SHOW_FREE_PUSH,
   EMPTY_AMMO_SLOT,
   GUNNER_SHOT_BASE_DAMAGE,
-  POWER_UP_DIG_SHOTS,
   TURBULENCE_MOVE_BASE,
   addAmmo,
   addAmmoUnchecked,
@@ -22,6 +22,7 @@ import {
   resolvePlayfulBottle,
   resolvePowerUp,
   resolveTurbulence,
+  tryArrogantPush,
   type AmmoSlotState,
   type GunnerCardInstance,
 } from './index.js';
@@ -71,7 +72,7 @@ describe('gunner shot sweet / outside', () => {
   it('區外 + 裝填傷 → (1+1)−1 = 1', () => {
     const r = resolveGunnerShot({
       attacker: { q: 4, r: 0 },
-      ammo: { damageBonus: 1, drawBonus: 0 },
+      ammo: { damageBonus: 1, drawBonus: 0 , pushBonus: 0 },
     });
     expect(r.bossDamage).toBe(1);
     expect(r.ammo).toEqual(EMPTY_AMMO_SLOT);
@@ -80,7 +81,7 @@ describe('gunner shot sweet / outside', () => {
   it('甜區 + 裝填傷 2 → 1+2 = 3', () => {
     const r = resolveGunnerShot({
       attacker: { q: 2, r: 0 },
-      ammo: { damageBonus: 2, drawBonus: 0 },
+      ammo: { damageBonus: 2, drawBonus: 0 , pushBonus: 0 },
     });
     expect(r.inSweetZone).toBe(true);
     expect(r.bossDamage).toBe(3);
@@ -99,7 +100,7 @@ describe('ammo +1 dmg applies then clears', () => {
       discardShotInstanceId: 's1',
     });
     expect(bottle.ok).toBe(true);
-    expect(bottle.ammo).toEqual({ damageBonus: 1, drawBonus: 0 });
+    expect(bottle.ammo).toEqual({ damageBonus: 1, drawBonus: 0 , pushBonus: 0 });
     expect(bottle.discardedShotId).toBe('s1');
     expect(bottle.hand.map((c) => c.instanceId)).toEqual(['s2']);
 
@@ -122,7 +123,7 @@ describe('ammo + draw flag', () => {
       hand,
     });
     expect(bottle.ok).toBe(true);
-    expect(bottle.ammo).toEqual({ damageBonus: 0, drawBonus: 1 });
+    expect(bottle.ammo).toEqual({ damageBonus: 0, drawBonus: 1 , pushBonus: 0 });
 
     const shot = resolveGunnerShot({
       attacker: { q: 2, r: 0 },
@@ -147,7 +148,7 @@ describe('ammo + draw flag', () => {
       discardShotInstanceId: 's2',
     });
     expect(mischief.ok).toBe(true);
-    expect(mischief.ammo).toEqual({ damageBonus: 1, drawBonus: 1 });
+    expect(mischief.ammo).toEqual({ damageBonus: 1, drawBonus: 1 , pushBonus: 0 });
 
     const shot = resolveGunnerShot({
       attacker: { q: 3, r: 0 },
@@ -162,7 +163,7 @@ describe('ammo + draw flag', () => {
 describe('ammo cap at 2', () => {
   it('合計上限 2；第三層失敗', () => {
     expect(AMMO_SLOT_MAX_TOTAL).toBe(2);
-    const full: AmmoSlotState = { damageBonus: 1, drawBonus: 1 };
+    const full: AmmoSlotState = { damageBonus: 1, drawBonus: 1 , pushBonus: 0 };
     expect(ammoSlotTotal(full)).toBe(2);
     expect(canAddAmmo(full, 1, 0)).toBe(false);
     expect(addAmmo(full, 1, 0)).toBeNull();
@@ -187,7 +188,7 @@ describe('ammo cap at 2', () => {
     hand = a.hand;
     const b = resolvePlayfulBottle({ ammo, hand, discardShotInstanceId: 's2' });
     expect(b.ok).toBe(true);
-    expect(b.ammo).toEqual({ damageBonus: 2, drawBonus: 0 });
+    expect(b.ammo).toEqual({ damageBonus: 2, drawBonus: 0 , pushBonus: 0 });
     const c = resolvePlayfulBottle({
       ammo: b.ammo,
       hand: b.hand,
@@ -199,7 +200,7 @@ describe('ammo cap at 2', () => {
 });
 
 describe('bottle requires discarding a shot', () => {
-  it('手牌無射擊 → fail', () => {
+  it('頑皮：手牌無射擊 → fail', () => {
     const hand = handWith({ cardId: 'playful_bottle', id: 'b1' });
     const r = resolvePlayfulBottle({ ammo: EMPTY_AMMO_SLOT, hand });
     expect(r.ok).toBe(false);
@@ -207,12 +208,22 @@ describe('bottle requires discarding a shot', () => {
     expect(r.ammo).toEqual(EMPTY_AMMO_SLOT);
   });
 
-  it('指定非射擊 instanceId → fail', () => {
+  it('胡鬧：無射擊也可成功', () => {
+    const hand = handWith({ cardId: 'mischief_bottle', id: 'b1' });
+    const r = resolveMischiefBottle({
+      ammo: EMPTY_AMMO_SLOT,
+      hand,
+    });
+    expect(r.ok).toBe(true);
+    expect(r.ammo.drawBonus).toBe(1);
+  });
+
+  it('頑皮：指定非射擊 instanceId → fail', () => {
     const hand = handWith(
       { cardId: 'shot', id: 's1' },
       { cardId: 'mischief_bottle', id: 'b1' },
     );
-    const r = resolveMischiefBottle({
+    const r = resolvePlayfulBottle({
       ammo: EMPTY_AMMO_SLOT,
       hand,
       discardShotInstanceId: 'b1',
@@ -296,47 +307,28 @@ describe('大亂流 resolveTurbulence', () => {
   });
 });
 
-describe('Power UP!! resolvePowerUp', () => {
-  it('happy：移動後檢 2 射擊', () => {
-    const deck = handWith(
-      { cardId: 'playful_bottle', id: 'b1' },
-      { cardId: 'shot', id: 's1' },
-      { cardId: 'shot', id: 's2' },
-      { cardId: 'mischief_bottle', id: 'b2' },
-    );
-    const r = resolvePowerUp({
-      hasMovedThisTurn: true,
-      mode: 'dig_shots',
-      deck,
-    });
+describe('狂妄氣瓶 resolvePowerUp', () => {
+  it('happy：裝填 pushBonus +1', () => {
+    const r = resolvePowerUp({ ammo: EMPTY_AMMO_SLOT });
     expect(r.ok).toBe(true);
-    expect(r.dugShots).toHaveLength(POWER_UP_DIG_SHOTS);
-    expect(r.dugShots.map((c) => c.instanceId)).toEqual(['s1', 's2']);
-    expect(r.remainingDeck.map((c) => c.instanceId)).toEqual(['b1', 'b2']);
+    expect(r.ammo).toEqual({ damageBonus: 0, drawBonus: 0, pushBonus: 1 });
   });
 
-  it('happy：臨時射擊吃裝填清槽且 cannotBottle', () => {
-    const r = resolvePowerUp({
-      hasMovedThisTurn: true,
-      mode: 'temp_shot',
+  it('槽滿失敗', () => {
+    const full: AmmoSlotState = { damageBonus: 1, drawBonus: 1, pushBonus: 0 };
+    const r = resolvePowerUp({ ammo: full });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe('ammo_slot_full');
+  });
+
+  it('射擊回傳 pushFromAmmo', () => {
+    const loaded = resolvePowerUp({ ammo: EMPTY_AMMO_SLOT });
+    const shot = resolveGunnerShot({
       attacker: { q: 2, r: 0 },
-      ammo: { damageBonus: 1, drawBonus: 0 },
+      ammo: loaded.ammo,
     });
-    expect(r.ok).toBe(true);
-    expect(r.cannotBottleImmediately).toBe(true);
-    expect(r.bossDamage).toBe(2);
-    expect(r.ammo).toEqual(EMPTY_AMMO_SLOT);
-    expect(r.events).toContainEqual({ type: 'TempShotPlayed' });
-  });
-
-  it('允許未移動就出 Power UP', () => {
-    const r = resolvePowerUp({
-      hasMovedThisTurn: false,
-      mode: 'dig_shots',
-      deck: [],
-    });
-    expect(r.ok).toBe(true);
-    expect(r.mode).toBe('dig_shots');
+    expect(shot.pushFromAmmo).toBe(1);
+    expect(shot.ammo).toEqual(EMPTY_AMMO_SLOT);
   });
 });
 
@@ -352,6 +344,7 @@ describe('來吧! 大鬧一場! resolveBigShow', () => {
     expect(r.ammo).toEqual({
       damageBonus: BIG_SHOW_FREE_DAMAGE,
       drawBonus: BIG_SHOW_FREE_DRAW,
+      pushBonus: BIG_SHOW_FREE_PUSH,
     });
     expect(r.events).toContainEqual({
       type: 'MayPlayShot',
@@ -361,12 +354,14 @@ describe('來吧! 大鬧一場! resolveBigShow', () => {
       type: 'AmmoSlotLoaded',
       damageBonus: 1,
       drawBonus: 1,
+      pushBonus: 1,
     });
     expect(r.events).toContainEqual({
       type: 'BigShowAmmoGranted',
       damageBonus: BIG_SHOW_FREE_DAMAGE,
       drawBonus: BIG_SHOW_FREE_DRAW,
-      ammo: { damageBonus: 1, drawBonus: 1 },
+      pushBonus: BIG_SHOW_FREE_PUSH,
+      ammo: { damageBonus: 1, drawBonus: 1, pushBonus: 1 },
     });
     expect(r.events.some((e) => e.type === 'CardsDrawn')).toBe(false);
     expect(r.events.some((e) => e.type === 'TempShotPlayed')).toBe(false);
@@ -375,7 +370,7 @@ describe('來吧! 大鬧一場! resolveBigShow', () => {
   });
 
   it('happy：已滿槽 {1,1} → 免費 {2,2}；後續手上射擊 3 傷 + 抽 2', () => {
-    const full: AmmoSlotState = { damageBonus: 1, drawBonus: 1 };
+    const full: AmmoSlotState = { damageBonus: 1, drawBonus: 1 , pushBonus: 0 };
     expect(ammoSlotTotal(full)).toBe(AMMO_SLOT_MAX_TOTAL);
     expect(addAmmo(full, 1, 0)).toBeNull();
 
@@ -386,7 +381,7 @@ describe('來吧! 大鬧一場! resolveBigShow', () => {
     expect(r.ok).toBe(true);
     expect(r.mayPlayShot).toBe(true);
     expect(r.ignoreRangePenaltyForShot).toBe(true);
-    expect(r.ammo).toEqual({ damageBonus: 2, drawBonus: 2 });
+    expect(r.ammo).toEqual({ damageBonus: 2, drawBonus: 2, pushBonus: 1 });
     expect(r.events.some((e) => e.type === 'TempShotPlayed')).toBe(false);
 
     // 峰值：{1,1}+free→{2,2} → 手上射擊 3 傷 + 抽 2（耗卡由上層）
@@ -404,9 +399,9 @@ describe('來吧! 大鬧一場! resolveBigShow', () => {
   it('峰值側：{2,0}+free→4傷+抽1；{0,2}+free→2傷+抽3', () => {
     const rDmg = resolveBigShow({
       hasMovedThisTurn: false,
-      ammo: { damageBonus: 2, drawBonus: 0 },
+      ammo: { damageBonus: 2, drawBonus: 0 , pushBonus: 0 },
     });
-    expect(rDmg.ammo).toEqual({ damageBonus: 3, drawBonus: 1 });
+    expect(rDmg.ammo).toEqual({ damageBonus: 3, drawBonus: 1, pushBonus: 1 });
     const shotDmg = resolveGunnerShot({
       attacker: { q: 2, r: 0 },
       ammo: rDmg.ammo,
@@ -417,9 +412,9 @@ describe('來吧! 大鬧一場! resolveBigShow', () => {
 
     const rDraw = resolveBigShow({
       hasMovedThisTurn: false,
-      ammo: { damageBonus: 0, drawBonus: 2 },
+      ammo: { damageBonus: 0, drawBonus: 2 , pushBonus: 0 },
     });
-    expect(rDraw.ammo).toEqual({ damageBonus: 1, drawBonus: 3 });
+    expect(rDraw.ammo).toEqual({ damageBonus: 1, drawBonus: 3, pushBonus: 1 });
     const shotDraw = resolveGunnerShot({
       attacker: { q: 2, r: 0 },
       ammo: rDraw.ammo,
@@ -430,7 +425,7 @@ describe('來吧! 大鬧一場! resolveBigShow', () => {
   });
 
   it('fail：出牌前已移動（不裝填、不授旗）', () => {
-    const ammo: AmmoSlotState = { damageBonus: 1, drawBonus: 0 };
+    const ammo: AmmoSlotState = { damageBonus: 1, drawBonus: 0 , pushBonus: 0 };
     const r = resolveBigShow({
       hasMovedThisTurn: true,
       ammo,
@@ -443,14 +438,80 @@ describe('來吧! 大鬧一場! resolveBigShow', () => {
   });
 
   it('addAmmoUnchecked 可超 cap；一般 addAmmo 不可', () => {
-    const full: AmmoSlotState = { damageBonus: 1, drawBonus: 1 };
+    const full: AmmoSlotState = { damageBonus: 1, drawBonus: 1 , pushBonus: 0 };
     expect(addAmmo(full, BIG_SHOW_FREE_DAMAGE, BIG_SHOW_FREE_DRAW)).toBeNull();
     expect(
       addAmmoUnchecked(full, BIG_SHOW_FREE_DAMAGE, BIG_SHOW_FREE_DRAW),
-    ).toEqual({ damageBonus: 2, drawBonus: 2 });
+    ).toEqual({ damageBonus: 2, drawBonus: 2, pushBonus: 0 });
     expect(addAmmo(full, 1, 1, { ignoreCap: true })).toEqual({
       damageBonus: 2,
       drawBonus: 2,
+      pushBonus: 0,
     });
+  });
+});
+
+describe('狂妄推牆 tryArrogantPush', () => {
+  it('空 dest：搬移 plain；保留 aged', () => {
+    let board = createEmptyBoard();
+    const gunner = { q: 2, r: 0 };
+    const tile = { q: 3, r: 0 };
+    board = placeTerrain(board, tile, 'plain', { aged: true });
+    const r = tryArrogantPush({ board, gunnerHex: gunner, chosenHex: tile });
+    expect(r.changed).toBe(true);
+    expect(board.tiles.has('3,0') || true).toBe(true);
+    // dest = (4,0)
+    expect(r.board.tiles.has('3,0')).toBe(false);
+    const dest = r.board.tiles.get('4,0');
+    expect(dest?.kind).toBe('plain');
+    expect(dest?.aged).toBe(true);
+  });
+
+  it('撞 broken：dest 清空且不在 board 留 tile（不傷王路徑）', () => {
+    let board = createEmptyBoard();
+    const gunner = { q: 2, r: 0 };
+    const tile = { q: 3, r: 0 };
+    const dest = { q: 4, r: 0 };
+    board = placeTerrain(board, tile, 'plain');
+    board = placeTerrain(board, dest, 'plain_broken', { aged: true });
+    const r = tryArrogantPush({ board, gunnerHex: gunner, chosenHex: tile });
+    expect(r.changed).toBe(true);
+    expect(r.board.tiles.has('3,0')).toBe(true); // source stays
+    expect(r.board.tiles.has('4,0')).toBe(false);
+  });
+
+  it('跳過非 plain 系／空格', () => {
+    let board = createEmptyBoard();
+    const gunner = { q: 2, r: 0 };
+    board = placeTerrain(board, { q: 3, r: 0 }, 'curse');
+    const a = tryArrogantPush({
+      board,
+      gunnerHex: gunner,
+      chosenHex: { q: 3, r: 0 },
+    });
+    expect(a.changed).toBe(false);
+    expect(a.reason).toBe('not_plain_family');
+    const b = tryArrogantPush({
+      board,
+      gunnerHex: gunner,
+      chosenHex: { q: 2, r: 1 },
+    });
+    expect(b.reason).toBe('empty');
+  });
+});
+
+describe('大亂流可棄狂妄氣瓶', () => {
+  it('power_up 算氣瓶', () => {
+    const hand = handWith({ cardId: 'power_up', id: 'p1' });
+    const r = resolveTurbulence({
+      board: createEmptyBoard(),
+      actorPosition: { q: 2, r: 0 },
+      hand,
+      discardBottleInstanceIds: ['p1'],
+      path: [{ q: 3, r: 0 }, { q: 4, r: 0 }],
+    });
+    expect(r.ok).toBe(true);
+    expect(r.discardedBottleIds).toEqual(['p1']);
+    expect(r.steps).toBe(2);
   });
 });

@@ -47,7 +47,7 @@ export const KNIGHT_CARD_DEFS: Record<KnightCardId, CardDefinition> = {
     id: 'undying',
     name: '不死存在',
     countsTowardAction: false,
-    silenced: true,
+    silenced: false,
     kind: ['ultimate'],
   },
 };

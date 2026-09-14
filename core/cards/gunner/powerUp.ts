@@ -1,113 +1,47 @@
 /**
- * 槍手「Power UP!!」×2：無「須已移動」限制（2026-09-09 人類訂正）。
- * 二選一：(a) 從牌庫檢最多 2 張射擊；(b) 本牌當臨時射擊（吃裝填清槽，之後不可立刻氣瓶）。
+ * 槍手「狂妄氣瓶」（cardId 仍為 power_up，避免牌庫 id 動盪）。
+ * 裝填槽 +1 pushBonus（計入 cap 2）；不再 dig_shots／temp_shot。
  * 計次；受沉默。
  */
 
-import type { Axial } from '../../hex/index.js';
-import { POWER_UP_DIG_SHOTS } from './constants.js';
-import { resolveGunnerShot } from './shot.js';
-import type {
-  AmmoSlotState,
-  GunnerCardEvent,
-  GunnerCardInstance,
-  PowerUpResult,
-} from './types.js';
-
-export type PowerUpMode = 'dig_shots' | 'temp_shot';
+import { addAmmo } from './ammo.js';
+import type { AmmoSlotState, GunnerCardEvent, PowerUpResult } from './types.js';
 
 export type ResolvePowerUpInput = {
-  /**
-   * @deprecated 已無「須已移動」限制；保留欄位以免舊呼叫端壞掉，忽略其值。
-   */
-  hasMovedThisTurn?: boolean;
-  mode: PowerUpMode;
-  /**
-   * dig_shots：牌庫頂端順序（本層只從中取出射擊，最多 POWER_UP_DIG_SHOTS）。
-   * 不足則檢到的都給（1 或 0）。
-   */
-  deck?: GunnerCardInstance[];
-  /** temp_shot：攻擊者格＋裝填槽。 */
-  attacker?: Axial;
-  ammo?: AmmoSlotState;
-  ignoreRangePenalty?: boolean;
-  bossHex?: Axial;
-  /** 檢牌上限；預設 POWER_UP_DIG_SHOTS。 */
-  digLimit?: number;
+  /** 當前裝填槽。 */
+  ammo: AmmoSlotState;
 };
 
 /**
- * 結算 Power UP!!（純函式）。
+ * 結算狂妄氣瓶：槽 +1 推牆層。
+ * 失敗：合計將超過 2。
  */
 export function resolvePowerUp(input: ResolvePowerUpInput): PowerUpResult {
-  if (input.mode === 'dig_shots') {
-    const limit = input.digLimit ?? POWER_UP_DIG_SHOTS;
-    const deck = [...(input.deck ?? [])];
-    const dugShots: GunnerCardInstance[] = [];
-    const remainingDeck: GunnerCardInstance[] = [];
-    for (const c of deck) {
-      if (dugShots.length < limit && c.cardId === 'shot') {
-        dugShots.push(c);
-      } else {
-        remainingDeck.push(c);
-      }
-    }
-    // 檢牌：從牌庫「找出」射擊，非射擊留在庫（順序保留相對）
-    const events: GunnerCardEvent[] = [
-      {
-        type: 'ShotsDug',
-        instanceIds: dugShots.map((c) => c.instanceId),
-        count: dugShots.length,
-      },
-    ];
-    return {
-      ok: true,
-      events,
-      counted: true,
-      mode: 'dig_shots',
-      dugShots,
-      remainingDeck,
-      cannotBottleImmediately: false,
-    };
-  }
-
-  // temp_shot
-  if (!input.attacker || !input.ammo) {
+  const next = addAmmo(input.ammo, 0, 0, 1);
+  if (!next) {
     return {
       ok: false,
-      reason: 'temp_shot_missing_input',
+      reason: 'ammo_slot_full',
       events: [],
       counted: true,
-      mode: 'temp_shot',
-      dugShots: [],
-      remainingDeck: input.deck ?? [],
-      cannotBottleImmediately: false,
+      ammo: input.ammo,
     };
   }
-
-  const shot = resolveGunnerShot({
-    attacker: input.attacker,
-    ammo: input.ammo,
-    ignoreRangePenalty: input.ignoreRangePenalty,
-    bossHex: input.bossHex,
-  });
-
   const events: GunnerCardEvent[] = [
-    { type: 'TempShotPlayed' },
-    ...shot.events,
+    {
+      type: 'AmmoSlotLoaded',
+      damageBonus: next.damageBonus,
+      drawBonus: next.drawBonus,
+      pushBonus: next.pushBonus,
+    },
   ];
-
   return {
     ok: true,
     events,
     counted: true,
-    mode: 'temp_shot',
-    dugShots: [],
-    remainingDeck: input.deck ?? [],
-    cannotBottleImmediately: true,
-    bossDamage: shot.bossDamage,
-    inSweetZone: shot.inSweetZone,
-    drawFromAmmo: shot.drawFromAmmo,
-    ammo: shot.ammo,
+    ammo: next,
   };
 }
+
+/** @deprecated 舊 dig／temp 模式已移除；保留型別名以免舊 import 碎裂。 */
+export type PowerUpMode = 'load_push';

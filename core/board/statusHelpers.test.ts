@@ -10,6 +10,7 @@ import {
   isAdjacentToMud,
   isAdjacentToSilence,
   placeTerrain,
+  fillNeighborsWithPlain,
   placeUnagedPlainIfEmpty,
   shortestPath,
 } from './index.js';
@@ -147,5 +148,22 @@ describe('placeUnagedPlainIfEmpty / curseFullAfterAbsorb', () => {
     expect(curseFullAfterAbsorb('knight', 2, 1)).toBe(true);
     expect(curseFullAfterAbsorb('gunner', 1, 0)).toBe(false);
     expect(curseFullAfterAbsorb('knight', 2, 0)).toBe(false);
+  });
+});
+
+describe('fillNeighborsWithPlain', () => {
+  it('fills empty neighbors with unaged plain; skips terrain/boss/occupied', () => {
+    let board = createEmptyBoard();
+    const center: Axial = { q: 2, r: 0 };
+    board = placeTerrain(board, { q: 3, r: 0 }, 'curse');
+    const occupied: Axial[] = [{ q: 2, r: 1 }];
+    const r = fillNeighborsWithPlain(board, center, occupied);
+    expect(r.placed.length).toBe(4); // 6 - curse - occupied
+    for (const h of r.placed) {
+      expect(getTile(r.board, h)?.kind).toBe('plain');
+      expect(getTile(r.board, h)?.aged).not.toBe(true);
+    }
+    expect(getTile(r.board, { q: 3, r: 0 })?.kind).toBe('curse');
+    expect(getTile(r.board, { q: 2, r: 1 })).toBeUndefined();
   });
 });

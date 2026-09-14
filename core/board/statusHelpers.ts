@@ -1,8 +1,8 @@
 /**
  * 詛咒攜帶上限／鄰沉默／鄰泥濘（薄輔助；上身與出牌擋在上層）。
  */
-import { neighbors, type Axial } from '../hex/index.js';
-import { absorbCurseAt, getTile, placeTerrain } from './board.js';
+import { equals, neighbors, type Axial } from '../hex/index.js';
+import { BOSS_HEX, absorbCurseAt, getTile, placeTerrain } from './board.js';
 import type { Board } from './types.js';
 
 /** 基礎移動預設上限（與試玩 TURN_MOVES_PER_ROUND 對齊）。 */
@@ -77,8 +77,8 @@ export function placeUnagedPlainIfEmpty(
 }
 
 /**
- * 本次吸咒後是否達 cap 而須立刻出局（不可停在 cap 上）。
- * absorbedCount=0 不觸發。
+ * 本次吸咒後是否達 cap 而須立刻走「咒滿 → 周圍鋪一般 → 封印」（不可停在 cap 上）。
+ * absorbedCount=0 不觸發。不離場、不設 eliminated。
  */
 export function curseFullAfterAbsorb(
   classId: string,
@@ -86,4 +86,29 @@ export function curseFullAfterAbsorb(
   absorbedCount: number,
 ): boolean {
   return absorbedCount > 0 && curseStacks >= curseCarryCap(classId);
+}
+
+/**
+ * 咒滿：每個空鄰格鋪未老化一般（不吃種類袋）。
+ * 跳過：既有地形、王格、有存活單位佔格的鄰格。
+ * 新 plain 進入老化管線（caller 登錄 ageKeys）。
+ */
+export function fillNeighborsWithPlain(
+  board: Board,
+  center: Axial,
+  occupied: readonly Axial[],
+): { board: Board; placed: Axial[] } {
+  let next = board;
+  const placed: Axial[] = [];
+  for (const n of neighbors(center)) {
+    if (equals(n, BOSS_HEX)) continue;
+    if (getTile(next, n)) continue;
+    if (occupied.some((o) => equals(o, n))) continue;
+    const r = placeUnagedPlainIfEmpty(next, n);
+    if (r.placed) {
+      next = r.board;
+      placed.push({ q: n.q, r: n.r });
+    }
+  }
+  return { board: next, placed };
 }

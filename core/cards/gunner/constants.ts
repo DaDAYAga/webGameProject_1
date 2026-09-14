@@ -8,7 +8,7 @@ export const TURBULENCE_MAX_BOTTLE_DISCARD = 2;
 /** 大亂流：基礎移動格數（總步數 = 棄牌數 + 此值）。 */
 export const TURBULENCE_MOVE_BASE = 1;
 
-/** Power UP!!：從牌庫檢射擊最多張數。 */
+/** @deprecated Power UP dig 已廢；保留常數以免舊測試 import 碎裂。 */
 export const POWER_UP_DIG_SHOTS = 2;
 
 /** 來吧! 大鬧一場!：成功時免費裝填頑皮層（傷害）。 */
@@ -16,3 +16,6 @@ export const BIG_SHOW_FREE_DAMAGE = 1;
 
 /** 來吧! 大鬧一場!：成功時免費裝填胡鬧層（抽牌；於後續射擊結算時抽）。 */
 export const BIG_SHOW_FREE_DRAW = 1;
+
+/** 來吧! 大鬧一場!：成功時免費裝填狂妄層（推牆）。 */
+export const BIG_SHOW_FREE_PUSH = 1;

@@ -16,7 +16,7 @@ import type {
   TurbulenceResult,
 } from './types.js';
 
-const BOTTLE_IDS = new Set(['playful_bottle', 'mischief_bottle']);
+const BOTTLE_IDS = new Set(['playful_bottle', 'mischief_bottle', 'power_up']);
 
 export type ResolveTurbulenceInput = {
   board: Board;

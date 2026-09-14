@@ -4,10 +4,10 @@
 export const CARD_SIDE_HINTS: Record<string, string> = {
   shot: '遠程傷王',
   playful_bottle: '棄1射擊裝填',
-  mischief_bottle: '棄1射擊裝填抽',
+  mischief_bottle: '裝填抽（不棄）',
   turbulence: '棄瓶移動',
-  power_up: '臨時射擊',
-  big_show: '免費氣瓶＋可再射',
+  power_up: '裝填推牆',
+  big_show: '免費三瓶＋可再射',
   magic_arrow: '遠程傷王',
   amplify: '下一招增幅',
   wind: '推地形',
@@ -18,8 +18,8 @@ export const CARD_SIDE_HINTS: Record<string, string> = {
   faith: '清1詛咒（未移動）',
   heroic_charge: '直線衝鋒',
   taunt: '限制王鋪牆',
-  devotion: '吸友軍詛咒',
-  undying: '輪末復活',
+  devotion: '吸友軍／咒格',
+  undying: '封印中解封移動',
 };
 
 export type CardRichTooltip = {
@@ -50,28 +50,28 @@ export const CARD_RICH_TOOLTIPS: Record<string, CardRichTooltip> = {
     title: '胡鬧氣瓶',
     countsLabel: '計次',
     silenceLabel: '受沉默',
-    sideEffects: '棄 1 張射擊 → 裝填抽牌 +1。',
-    how: '手牌須有射擊可棄；裝填槽合計上限 2。成功後耗 1 行動點。',
+    sideEffects: '不棄牌 → 裝填抽牌 +1。',
+    how: '裝填槽合計上限 2（傷＋抽＋推）；槽滿則失敗。成功後耗 1 行動點。',
   },
   turbulence: {
     title: '大亂流',
     countsLabel: '計次',
     silenceLabel: '受沉默',
-    sideEffects: '可棄最多 2 張氣瓶牌，移動步數＝棄牌數＋1。',
+    sideEffects: '可棄最多 2 張氣瓶（含狂妄），移動步數＝棄牌數＋1。',
     how: '進入指定後點恰好 N 步的可站終點；路徑不可穿牆。棄掉的氣瓶與本牌一併離手。',
   },
   power_up: {
-    title: 'Power UP!!',
+    title: '狂妄氣瓶',
     countsLabel: '計次',
     silenceLabel: '受沉默',
-    sideEffects: '臨時射擊（清裝填）。',
-    how: '以臨時射擊模式對王結算遠程傷並清空裝填；本薄 UI 走 temp_shot 路徑。',
+    sideEffects: '裝填推牆 +1（計入槽上限 2）。',
+    how: '下次射擊若有 pushBonus，結算後點 N 個鄰格做徑向推牆（不傷王）。',
   },
   big_show: {
     title: '來吧! 大鬧一場!',
     countsLabel: '計次',
     silenceLabel: '受沉默',
-    sideEffects: '免費氣瓶（可超 cap）＋授予再打 1 張手上射擊（可忽距離）。',
+    sideEffects: '免費頑皮+胡鬧+狂妄（可超 cap）＋授予再打 1 張手上射擊。',
     how: '須尚未移動。成功後可再打 1 張手上射擊且不耗該次行動點、忽略距離懲罰。',
   },
   amplify: {
@@ -141,8 +141,8 @@ export const CARD_RICH_TOOLTIPS: Record<string, CardRichTooltip> = {
     title: '奉獻',
     countsLabel: '不計次',
     silenceLabel: '受沉默',
-    sideEffects: '從鄰 1 友軍吸取詛咒；可能抽出不死。',
-    how: '點友軍格（已鄰則直接結算）。轉移詛咒層數；致死抽出時記 UndyingExtracted。',
+    sideEffects: '吸鄰 1 友軍 1 層詛咒，或清鄰 1 詛咒地形（自己 +1）。',
+    how: '點友軍或詛咒格。達 cap 走咒滿鋪鄰封印，不再抽出不死離場。',
   },
   taunt: {
     title: '嘲諷',
@@ -155,8 +155,8 @@ export const CARD_RICH_TOOLTIPS: Record<string, CardRichTooltip> = {
     title: '不死存在',
     countsLabel: '不計次',
     silenceLabel: '不受沉默',
-    sideEffects: '輪末復活；落點周圍牆破碎化。',
-    how: '須已死亡且可行動者皆結束之輪末（薄 UI 勾選）。點可站落點復活；強制結束。',
+    sideEffects: '封印中可出：移到可站落點並解封；無周圍地形特效。鄰沉默不擋。',
+    how: '須已封印。點可站落點移動；若落地立刻六鄰滿則再封印。強制結束回合。',
   },
 };
 

@@ -443,7 +443,7 @@ describe('奉獻 resolveDevotion', () => {
     expect(r.extractedUndying).toBe(false);
   });
 
-  it('致死 → 抽出不死存在', () => {
+  it('吸後達高層仍不抽出不死（咒滿由上層處理）', () => {
     const r = resolveDevotion({
       actorHex: { q: 2, r: 0 },
       allyHex: { q: 3, r: 0 },
@@ -451,12 +451,10 @@ describe('奉獻 resolveDevotion', () => {
       allyCurseStacks: 1,
     });
     expect(r.ok).toBe(true);
-    expect(r.wouldKillSelf).toBe(true);
-    expect(r.extractedUndying).toBe(true);
-    expect(r.events).toContainEqual({
-      type: 'UndyingExtracted',
-      reason: 'devotion_lethal',
-    });
+    expect(r.selfCurseStacks).toBe(KNIGHT_CURSE_DEATH_STACKS);
+    expect(r.extractedUndying).toBe(false);
+    expect(r.wouldKillSelf).toBe(false);
+    expect(r.events.some((e) => e.type === 'UndyingExtracted')).toBe(false);
   });
 
   it('fail：非鄰 1', () => {
@@ -483,7 +481,7 @@ describe('奉獻 resolveDevotion', () => {
 });
 
 describe('不死存在 resolveUndying', () => {
-  it('happy：輪末復活；清破碎、裂完整；不傷王', () => {
+  it('happy：封印中落地；周圍地形不變；不傷王', () => {
     let board = createEmptyBoard();
     const land: Axial = { q: 3, r: 0 };
     const broken: Axial = { q: 4, r: 0 };
@@ -496,48 +494,41 @@ describe('不死存在 resolveUndying', () => {
     const r = resolveUndying({
       board,
       landingHex: land,
-      isDead: true,
+      isSealed: true,
       hasUndyingInHand: true,
-      atRoundEndAfterActors: true,
     });
     expect(r.ok).toBe(true);
     expect(r.forceEndTurn).toBe(true);
     expect(r.bossDamage).toBe(0);
-    expect(getTile(r.board, broken)).toBeUndefined();
-    expect(getTile(r.board, plain)?.kind).toBe('plain_broken');
+    expect(r.affectedHexes).toEqual([]);
+    // 周圍無特效
+    expect(getTile(r.board, broken)?.kind).toBe('plain_broken');
+    expect(getTile(r.board, plain)?.kind).toBe('plain');
     expect(getTile(r.board, curse)?.kind).toBe('curse');
     expect(r.actorPosition).toEqual(land);
   });
 
-  it('fail：奉獻同回合抽出須 defer', () => {
+  it('fail：未封印', () => {
     const r = resolveUndying({
       board: createEmptyBoard(),
       landingHex: { q: 2, r: 0 },
-      isDead: true,
+      isSealed: false,
       hasUndyingInHand: true,
-      extractedThisRound: true,
-      atRoundEndAfterActors: true,
     });
     expect(r.ok).toBe(false);
-    expect(r.reason).toBe('extracted_this_round_defer');
+    expect(r.reason).toBe('not_sealed');
   });
 
-  it('fail：非輪末／未死亡', () => {
-    const a = resolveUndying({
+  it('fail：落點被佔', () => {
+    const land = { q: 2, r: 0 };
+    const r = resolveUndying({
       board: createEmptyBoard(),
-      landingHex: { q: 2, r: 0 },
-      isDead: false,
+      landingHex: land,
+      isSealed: true,
       hasUndyingInHand: true,
-      atRoundEndAfterActors: true,
+      occupiedHexes: [land],
     });
-    expect(a.reason).toBe('not_dead');
-    const b = resolveUndying({
-      board: createEmptyBoard(),
-      landingHex: { q: 2, r: 0 },
-      isDead: true,
-      hasUndyingInHand: true,
-      atRoundEndAfterActors: false,
-    });
-    expect(b.reason).toBe('not_round_end');
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe('landing_occupied');
   });
 });

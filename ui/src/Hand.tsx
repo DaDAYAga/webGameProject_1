@@ -25,7 +25,7 @@ type HandProps = {
   actionsLeft?: number;
   /** 大招授予的免費射擊。 */
   mayBonusShot?: boolean;
-  /** 已封印：全部牌不可打。 */
+  /** 已封印：全部牌不可打（不死存在除外）。 */
   sealed?: boolean;
 };
 
@@ -104,7 +104,8 @@ export function Hand({
           isCounted &&
           actionsLeft <= 0 &&
           !(card.cardId === 'shot' && mayBonusShot);
-        const blocked = blockedBySilence || blockedByAction || sealed;
+        const blockedBySeal = sealed && card.cardId !== 'undying';
+        const blocked = blockedBySilence || blockedByAction || blockedBySeal;
         return (
           <button
             key={card.instanceId}

@@ -38,7 +38,7 @@ export const GUNNER_CARD_DEFS: Record<GunnerCardId, CardDefinition> = {
   },
   power_up: {
     id: 'power_up',
-    name: 'Power UP!!',
+    name: '狂妄氣瓶',
     countsTowardAction: true,
     silenced: true,
     kind: ['utility', 'buff'],

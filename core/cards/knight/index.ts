@@ -55,7 +55,10 @@ export {
 
 export {
   resolveDevotion,
+  resolveDevotionCurseTile,
   type ResolveDevotionInput,
+  type ResolveDevotionCurseTileInput,
+  type DevotionCurseTileResult,
 } from './devotion.js';
 
 export {

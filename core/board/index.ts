@@ -14,6 +14,7 @@ export {
   absorbCursesAlongPath,
   placeUnagedPlainIfEmpty,
   curseFullAfterAbsorb,
+  fillNeighborsWithPlain,
 } from './statusHelpers.js';
 export type {
   ShortestPathOptions,

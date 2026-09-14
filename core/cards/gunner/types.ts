@@ -1,5 +1,5 @@
 /**
- * 槍手卡牌／裝填槽型別（handoff §9 + 遠程修訂 2026-09-09b）。
+ * 槍手卡牌／裝填槽型別（handoff §9 + 遠程修訂 2026-09-09b／氣瓶 2026-09-14f）。
  */
 
 import type { Axial } from '../../hex/index.js';
@@ -16,23 +16,26 @@ export type GunnerCardId =
   | 'big_show';
 
 /**
- * 裝填槽狀態（全角色合計最多 2 層；目前存於槍手／actor 狀態）。
- * damageBonus：頑皮氣瓶；drawBonus：胡鬧氣瓶。
+ * 裝填槽狀態（手牌氣瓶合計最多 2 層；大招 unchecked 可超）。
+ * damageBonus：頑皮；drawBonus：胡鬧；pushBonus：狂妄氣瓶。
  */
 export type AmmoSlotState = {
   /** 下一次射擊傷害加成層數。 */
   damageBonus: number;
   /** 下一次射擊額外抽牌層數（結算時回傳給上層抽）。 */
   drawBonus: number;
+  /** 下一次射擊徑向推牆次數（僅 pushBonus；玩家點選 N 鄰格）。 */
+  pushBonus: number;
 };
 
 /** 空裝填槽。 */
 export const EMPTY_AMMO_SLOT: AmmoSlotState = {
   damageBonus: 0,
   drawBonus: 0,
+  pushBonus: 0,
 };
 
-/** 裝填槽合計層數上限。 */
+/** 裝填槽合計層數上限（手牌氣瓶）。 */
 export const AMMO_SLOT_MAX_TOTAL = 2;
 
 /** 槍手卡牌實例。 */
@@ -44,7 +47,12 @@ export type GunnerCardInstance = CardInstanceBase & {
 export type GunnerCardEvent =
   | CombatEvent
   | { type: 'AmmoSlotCleared' }
-  | { type: 'AmmoSlotLoaded'; damageBonus: number; drawBonus: number }
+  | {
+      type: 'AmmoSlotLoaded';
+      damageBonus: number;
+      drawBonus: number;
+      pushBonus: number;
+    }
   | { type: 'ShotDiscarded'; instanceId: string }
   | { type: 'BottlesDiscarded'; instanceIds: string[] }
   | { type: 'ActorMoved'; from: Axial; to: Axial }
@@ -58,6 +66,7 @@ export type GunnerCardEvent =
       type: 'BigShowAmmoGranted';
       damageBonus: number;
       drawBonus: number;
+      pushBonus: number;
       ammo: AmmoSlotState;
     };
 
@@ -74,6 +83,8 @@ export type GunnerShotResult = {
   inSweetZone: boolean;
   /** 結算前裝填抽牌加成（上層應抽這麼多；槽已清空）。 */
   drawFromAmmo: number;
+  /** 結算前狂妄推牆層數（上層在清槽前保存；槽已清空）。 */
+  pushFromAmmo: number;
   /** 結算後裝填槽（射擊後必清空）。 */
   ammo: AmmoSlotState;
 };
@@ -86,11 +97,12 @@ export type GunnerBottleResult = {
   /**
    * 氣瓶本身是否計次。
    * // UNRESOLVED: 交接未明示氣瓶是否計次；預設不計次（utility／裝填）。
+   * 2026-09-13 起薄 UI／定義表改為計次；本欄仍 false 表「本函式不扣行動」。
    */
   counted: false;
   /** 更新後裝填槽。 */
   ammo: AmmoSlotState;
-  /** 被棄的射擊 instanceId（成功時）。 */
+  /** 被棄的射擊 instanceId（頑皮成功時；胡鬧／狂妄無棄牌）。 */
   discardedShotId?: string;
   /** 更新後手牌（已移除棄掉的射擊；氣瓶本身由上層移除）。 */
   hand: GunnerCardInstance[];
@@ -108,41 +120,30 @@ export type TurbulenceResult = {
   steps: number;
 };
 
-/** Power UP!! 結算結果。 */
+/**
+ * 狂妄氣瓶（cardId 仍為 power_up）結算結果。
+ * 不再 dig_shots／temp_shot。
+ */
 export type PowerUpResult = {
   ok: boolean;
   reason?: string;
   events: GunnerCardEvent[];
   counted: true;
-  mode: 'dig_shots' | 'temp_shot';
-  dugShots: GunnerCardInstance[];
-  remainingDeck: GunnerCardInstance[];
-  /** temp_shot 成功後不可立刻接氣瓶。 */
-  cannotBottleImmediately: boolean;
-  bossDamage?: number;
-  inSweetZone?: boolean;
-  drawFromAmmo?: number;
-  ammo?: AmmoSlotState;
+  /** 更新後裝填槽。 */
+  ammo: AmmoSlotState;
 };
 
 /**
- * 來吧! 大鬧一場! 結算結果（2026-09-09g：不抽牌；授予可出手上 1 射擊＋ignoreRangePenalty）。
+ * 來吧! 大鬧一場! 結算結果（2026-09-09g／2026-09-14f：免費三瓶層）。
  */
 export type BigShowResult = {
   ok: boolean;
   reason?: string;
   events: GunnerCardEvent[];
   counted: true;
-  /**
-   * 成功時為 true：之後可打 1 張手上射擊（耗該卡；非白送 TempShot）。
-   */
   mayPlayShot: boolean;
-  /**
-   * 成功時為 true：該後續射擊應忽略甜區外 −1。
-   * 上層呼叫 resolveGunnerShot 時傳 ignoreRangePenalty: true。
-   */
   ignoreRangePenaltyForShot: boolean;
-  /** 成功時含免費 +傷／+抽（可超 AMMO_SLOT_MAX_TOTAL）；失敗則原樣。 */
+  /** 成功時含免費 +傷／+抽／+推（可超 AMMO_SLOT_MAX_TOTAL）；失敗則原樣。 */
   ammo: AmmoSlotState;
 };
 

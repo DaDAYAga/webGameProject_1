@@ -144,18 +144,19 @@ describe('pickThreatPlacementHexes', () => {
     );
   });
 
-  it('crushHexes：已封印本體可被選且優先於一般空格', () => {
+  it('佔格（含封印本體）一律跳過，不可再壓出局', () => {
     const board = createEmptyBoard();
-    const crush = { q: 2, r: 0 };
+    const sealedBody = { q: 2, r: 0 };
     const actors: ThreatActor[] = [
-      { id: 'k', hex: crush, role: 'melee' },
+      { id: 'k', hex: sealedBody, role: 'melee' },
     ];
-    const picks = pickThreatPlacementHexes(board, actors, 1, {
+    const picks = pickThreatPlacementHexes(board, actors, 3, {
       bounds,
-      occupied: [crush],
-      crushHexes: [crush],
+      occupied: [sealedBody],
     });
-    expect(picks[0]).toEqual(crush);
+    expect(picks.every((p) => !(p.q === sealedBody.q && p.r === sealedBody.r))).toBe(
+      true,
+    );
   });
 });
 

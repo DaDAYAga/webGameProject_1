@@ -1,6 +1,6 @@
 /**
  * 槍手 PVE 卡牌（core/cards/gunner）。
- * 已實作：射擊、氣瓶、大亂流、Power UP!!、來吧! 大鬧一場!
+ * 已實作：射擊、氣瓶、大亂流、狂妄氣瓶、來吧! 大鬧一場!
  */
 
 export type {
@@ -26,6 +26,7 @@ export {
   POWER_UP_DIG_SHOTS,
   BIG_SHOW_FREE_DAMAGE,
   BIG_SHOW_FREE_DRAW,
+  BIG_SHOW_FREE_PUSH,
 } from './constants.js';
 
 export {
@@ -68,3 +69,12 @@ export {
   GUNNER_CARD_DEFS,
   makeGunnerCard,
 } from './stubs.js';
+
+export {
+  radialDest,
+  tryArrogantPush,
+  applyArrogantPushes,
+  type TryArrogantPushInput,
+  type TryArrogantPushResult,
+} from './arrogantPush.js';
+

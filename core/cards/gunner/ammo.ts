@@ -9,58 +9,67 @@ import {
   type AmmoSlotState,
 } from './types.js';
 
-/** 裝填槽目前合計層數（傷害＋抽牌）。 */
+/** 裝填槽目前合計層數（傷害＋抽牌＋推牆）。 */
 export function ammoSlotTotal(slot: AmmoSlotState): number {
-  return slot.damageBonus + slot.drawBonus;
+  return slot.damageBonus + slot.drawBonus + slot.pushBonus;
 }
 
 /**
  * 是否還能再加指定層數（不超過上限 2）。
- * @param addDamage 擬加傷害層
- * @param addDraw 擬加抽牌層
  */
 export function canAddAmmo(
   slot: AmmoSlotState,
   addDamage: number,
   addDraw: number,
+  addPush: number = 0,
 ): boolean {
-  return ammoSlotTotal(slot) + addDamage + addDraw <= AMMO_SLOT_MAX_TOTAL;
+  return ammoSlotTotal(slot) + addDamage + addDraw + addPush <= AMMO_SLOT_MAX_TOTAL;
 }
 
 /**
- * 加上傷害／抽牌層；超過上限則回傳 null。
- * 回傳新物件（不變更原 slot）。
+ * 加上傷害／抽牌／推牆層；超過上限則回傳 null。
  * 一般氣瓶必須走此路徑（cap=2）。
- * @param options.ignoreCap 若 true，等同 addAmmoUnchecked（僅大招應使用）。
+ * 第四參數可為 addPush 數字，或舊式 `{ ignoreCap }` options（相容）。
  */
 export function addAmmo(
   slot: AmmoSlotState,
   addDamage: number,
   addDraw: number,
+  addPushOrOptions: number | { ignoreCap?: boolean } = 0,
   options?: { ignoreCap?: boolean },
 ): AmmoSlotState | null {
-  if (options?.ignoreCap === true) {
-    return addAmmoUnchecked(slot, addDamage, addDraw);
+  let addPush = 0;
+  let opts = options;
+  if (typeof addPushOrOptions === 'object' && addPushOrOptions !== null) {
+    opts = addPushOrOptions;
+  } else {
+    addPush = addPushOrOptions;
   }
-  if (!canAddAmmo(slot, addDamage, addDraw)) return null;
+  if (opts?.ignoreCap === true) {
+    return addAmmoUnchecked(slot, addDamage, addDraw, addPush);
+  }
+  if (!canAddAmmo(slot, addDamage, addDraw, addPush)) return null;
   return {
     damageBonus: slot.damageBonus + addDamage,
     drawBonus: slot.drawBonus + addDraw,
+    pushBonus: slot.pushBonus + addPush,
   };
 }
 
 /**
  * 無上限裝填（僅大招「來吧! 大鬧一場!」免費氣瓶）。
- * 不檢查 AMMO_SLOT_MAX_TOTAL；一般氣瓶請用 addAmmo。
+ * 註：頑皮+胡鬧+狂妄 各 +1。
  */
 export function addAmmoUnchecked(
   slot: AmmoSlotState,
   addDamage: number,
   addDraw: number,
+  addPush: number = 0,
 ): AmmoSlotState {
   return {
     damageBonus: slot.damageBonus + addDamage,
     drawBonus: slot.drawBonus + addDraw,
+    pushBonus: slot.pushBonus + addPush,
   };
 }
 

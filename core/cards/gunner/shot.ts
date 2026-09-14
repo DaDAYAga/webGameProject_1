@@ -31,7 +31,7 @@ export type ResolveGunnerShotInput = {
 /**
  * 結算槍手射擊（含臨時射擊路徑：同樣吃裝填並清槽）。
  * - 僅打王（呼叫端不需傳 target；本函式固定對王）
- * - bonus = ammo.damageBonus；drawFromAmmo = ammo.drawBonus
+ * - bonus = ammo.damageBonus；drawFromAmmo = ammo.drawBonus；pushFromAmmo = ammo.pushBonus
  * - 結算後 ammo 清空
  */
 export function resolveGunnerShot(
@@ -61,6 +61,7 @@ export function resolveGunnerShot(
     bossDamage: ranged.effective ? ranged.damage : 0,
     inSweetZone: ranged.inSweetZone,
     drawFromAmmo: ammo.drawBonus,
+    pushFromAmmo: ammo.pushBonus,
     ammo: clearAmmoSlot(),
   };
 }

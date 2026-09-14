@@ -37,8 +37,6 @@ export type PickThreatPlacementOptions = {
   protectedHexes?: readonly Axial[];
   /** 額外排除（本輪已選等）。 */
   exclude?: readonly Axial[];
-  /** 已封印單位本體格：可鋪，用來壓出局。 */
-  crushHexes?: readonly Axial[];
 };
 
 function defaultBounds(bounds?: MapBounds): MapBounds {
@@ -50,11 +48,9 @@ function isExcluded(
   occupied: readonly Axial[],
   protectedHexes: readonly Axial[],
   exclude: readonly Axial[],
-  crushHexes: readonly Axial[] = [],
 ): boolean {
   if (equals(h, BOSS_HEX)) return true;
-  const crush = crushHexes.some((c) => equals(c, h));
-  if (!crush && occupied.some((o) => equals(o, h))) return true;
+  if (occupied.some((o) => equals(o, h))) return true;
   if (protectedHexes.some((p) => equals(p, h))) return true;
   if (exclude.some((e) => equals(e, h))) return true;
   return false;
@@ -107,9 +103,7 @@ function scoreCandidate(
   hex: Axial,
   actors: readonly ThreatActor[],
   bounds: MapBounds,
-  crushHexes: readonly Axial[] = [],
 ): number {
-  if (crushHexes.some((c) => equals(c, hex))) return 20000;
   const scores = actors.map((a) => scoreHexForActor(board, hex, a, bounds));
   const best = scores.reduce((m, s) => (s > m ? s : m), 0);
   const support = scores.reduce((s, v) => s + v, 0) - best;
@@ -133,14 +127,13 @@ export function pickThreatPlacementHexes(
   const bounds = defaultBounds(opts.bounds);
   const occupied = opts.occupied ?? [];
   const protectedHexes = opts.protectedHexes ?? [];
-  const crushHexes = opts.crushHexes ?? [];
   const exclude = [...(opts.exclude ?? [])];
 
   const out: Axial[] = [];
   // 逐格選：每次重算分數（前一格已佔入 exclude，模擬連續鋪）
   for (let i = 0; i < n; i++) {
     const candidates = listMapHexes(bounds).filter((h) => {
-      if (isExcluded(h, occupied, protectedHexes, exclude, crushHexes)) return false;
+      if (isExcluded(h, occupied, protectedHexes, exclude)) return false;
       if (getTile(board, h) !== undefined) return false;
       return true;
     });
@@ -150,7 +143,7 @@ export function pickThreatPlacementHexes(
     let bestScore = -1;
     let bestKey = '';
     for (const h of candidates) {
-      const s = scoreCandidate(board, h, actors, bounds, crushHexes);
+      const s = scoreCandidate(board, h, actors, bounds);
       const key = hexKey(h);
       // 同分取鍵序穩定，方便測試
       if (s > bestScore || (s === bestScore && (best === null || key < bestKey))) {
