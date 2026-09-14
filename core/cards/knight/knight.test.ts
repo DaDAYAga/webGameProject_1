@@ -16,7 +16,6 @@ import {
   HEROIC_CHARGE_WALL_DAMAGE_CAP,
   KNIGHT_ATTACK_BOSS_DAMAGE,
   KNIGHT_CARD_DEFS,
-  KNIGHT_CURSE_DEATH_STACKS,
   TAUNT_PRIORITY,
   makeKnightCard,
   resolveDevotion,
@@ -25,7 +24,9 @@ import {
   resolveKnightAttack,
   resolveTaunt,
   resolveUndying,
+  extractCardFromLibrary,
   tauntBlocksPlacement,
+  tauntForcesPlacement,
 } from './index.js';
 
 const DIR_EQ = AXIAL_DIRECTIONS[0]!; // +q
@@ -368,7 +369,7 @@ describe('嘲諷 resolveTaunt', () => {
     expect(r.bossDamage).toBe(0);
   });
 
-  it('succeeds on others turn; blocks ring 1', () => {
+  it('succeeds on others turn; forces ring 1 (does not block)', () => {
     const center: Axial = { q: 2, r: 0 };
     const r = resolveTaunt({
       isOthersTurn: true,
@@ -382,10 +383,14 @@ describe('嘲諷 resolveTaunt', () => {
       center,
       ringDistance: 1,
     });
-    expect(tauntBlocksPlacement(r.bossPlaceRestriction, { q: 3, r: 0 })).toBe(
+    expect(tauntForcesPlacement(r.bossPlaceRestriction, { q: 3, r: 0 })).toBe(
       true,
     );
-    expect(tauntBlocksPlacement(r.bossPlaceRestriction, { q: 5, r: 0 })).toBe(
+    expect(tauntForcesPlacement(r.bossPlaceRestriction, { q: 5, r: 0 })).toBe(
+      false,
+    );
+    expect(tauntForcesPlacement(r.bossPlaceRestriction, center)).toBe(false);
+    expect(tauntBlocksPlacement(r.bossPlaceRestriction, { q: 3, r: 0 })).toBe(
       false,
     );
   });
@@ -443,16 +448,16 @@ describe('奉獻 resolveDevotion', () => {
     expect(r.extractedUndying).toBe(false);
   });
 
-  it('吸後達高層仍不抽出不死（咒滿由上層處理）', () => {
+  it('吸後達 cap 時 extractedUndying 提示上層從牌庫抽出不死', () => {
     const r = resolveDevotion({
       actorHex: { q: 2, r: 0 },
       allyHex: { q: 3, r: 0 },
-      selfCurseStacks: KNIGHT_CURSE_DEATH_STACKS - 1,
+      selfCurseStacks: 1,
       allyCurseStacks: 1,
     });
     expect(r.ok).toBe(true);
-    expect(r.selfCurseStacks).toBe(KNIGHT_CURSE_DEATH_STACKS);
-    expect(r.extractedUndying).toBe(false);
+    expect(r.selfCurseStacks).toBe(2);
+    expect(r.extractedUndying).toBe(true);
     expect(r.wouldKillSelf).toBe(false);
     expect(r.events.some((e) => e.type === 'UndyingExtracted')).toBe(false);
   });
@@ -477,6 +482,25 @@ describe('奉獻 resolveDevotion', () => {
     });
     expect(r.ok).toBe(false);
     expect(r.reason).toBe('ally_no_curse');
+  });
+});
+
+describe('extractCardFromLibrary', () => {
+  it('抽出第一張 undying，其餘保留原序', () => {
+    const lib = [
+      { cardId: 'attack', instanceId: 'a1' },
+      { cardId: 'undying', instanceId: 'u1' },
+      { cardId: 'taunt', instanceId: 't1' },
+    ];
+    const r = extractCardFromLibrary(lib, 'undying');
+    expect(r).not.toBeNull();
+    expect(r!.card.instanceId).toBe('u1');
+    expect(r!.rest.map((c) => c.instanceId)).toEqual(['a1', 't1']);
+  });
+
+  it('牌庫沒有則回 null（不抽棄牌）', () => {
+    const lib = [{ cardId: 'attack', instanceId: 'a1' }];
+    expect(extractCardFromLibrary(lib, 'undying')).toBeNull();
   });
 });
 

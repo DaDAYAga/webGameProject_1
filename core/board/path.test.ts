@@ -157,15 +157,31 @@ describe('shortestPath occupied — 繞盟友', () => {
     expect(shortestPath(board, from, ally, { occupied: [ally] })).toBeNull();
   });
 
-  it('curse walkable through path; silence blocks', () => {
+  it('prefers a curse-free shortest path when one exists', () => {
+    let board = createEmptyBoard();
+    const from: Axial = { q: 0, r: 0 };
+    const dest: Axial = { q: 2, r: -1 };
+    // 兩條等長 2 步：(1,0) 詛咒 vs (1,-1) 空
+    board = placeTerrain(board, { q: 1, r: 0 }, 'curse');
+    const path = shortestPath(board, from, dest);
+    expect(path).not.toBeNull();
+    expect(path!.some((h) => h.q === 1 && h.r === 0)).toBe(false);
+    expect(path!.some((h) => h.q === 1 && h.r === -1)).toBe(true);
+  });
+
+  it('still walks curse when it is the only shortest way', () => {
     let board = createEmptyBoard();
     const from: Axial = { q: 2, r: 0 };
+    const dest: Axial = { q: 4, r: 0 };
     board = placeTerrain(board, { q: 3, r: 0 }, 'curse');
-    board = placeTerrain(board, { q: 3, r: 1 }, 'silence');
-    const viaCurse = shortestPath(board, from, { q: 4, r: 0 });
-    expect(viaCurse).not.toBeNull();
-    expect(viaCurse!.some((h) => h.q === 3 && h.r === 0)).toBe(true);
+    const path = shortestPath(board, from, dest);
+    expect(path).not.toBeNull();
+    expect(path!.some((h) => h.q === 3 && h.r === 0)).toBe(true);
+  });
 
-    expect(shortestPath(board, from, { q: 3, r: 1 })).toBeNull();
+  it('silence still blocks', () => {
+    let board = createEmptyBoard();
+    board = placeTerrain(board, { q: 3, r: 1 }, 'silence');
+    expect(shortestPath(board, { q: 2, r: 0 }, { q: 3, r: 1 })).toBeNull();
   });
 });

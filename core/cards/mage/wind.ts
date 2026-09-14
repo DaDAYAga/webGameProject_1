@@ -1,6 +1,6 @@
 /**
  * 法師「御風術」×2：計次；把地形推 1 格（增幅後 2 格）。
- * 可動 plain／plain_broken／plain_starter／curse；不可動 silence／punish／mud。
+ * 可動 plain／plain_broken／plain_starter；不可動 curse／silence／punish／mud。
  * 禁止壓頭（推到已封印單位本體 → wouldEliminate）。
  */
 
@@ -27,15 +27,15 @@ export const WIND_AMPLIFIED_STEPS = 2;
 
 /**
  * 御風術允許推動的地形 kind。
- * 為何獨立：board.kindAllowsPush 預設 silence 可推，但牌面不可動 silence。
+ * 為何獨立：board.kindAllowsPush 預設 silence／curse 可推，但御風牌面不可動。
  */
 export function mageWindAllowsKind(kind: TerrainKind): boolean {
   switch (kind) {
     case 'plain':
     case 'plain_broken':
     case 'plain_starter':
-    case 'curse':
       return true;
+    case 'curse':
     case 'silence':
     case 'punish':
     case 'mud':
@@ -120,7 +120,10 @@ export function resolveWindControl(
   if (!canWindPushFrom(board, cursor)) {
     const tile = getTile(board, cursor);
     const reason =
-      tile?.kind === 'silence' || tile?.kind === 'punish' || tile?.kind === 'mud'
+      tile?.kind === 'silence' ||
+      tile?.kind === 'punish' ||
+      tile?.kind === 'mud' ||
+      tile?.kind === 'curse'
         ? `cannot_move_${tile.kind}`
         : 'cannot_push_from';
     return {

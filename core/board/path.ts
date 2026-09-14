@@ -74,6 +74,7 @@ function stacksAfterEnter(
  * - 進入鄰格僅當 `canStandAt`（**起點 from 不重驗**）
  * - 預設 toward 必須可站，否則 null；`allowUnstandableTarget` 可放寬
  * - `curseCarry`：BFS 狀態含沿途 stacks，超量 curse 不可進
+ * - 先找不踩中途詛咒的最短路；沒有才退回可踩咒的最短路（不預設走咒）
  * - 回傳含兩端的格子序列；不可達回 null；from===toward 回 `[from]`
  */
 export function shortestPath(
@@ -81,6 +82,28 @@ export function shortestPath(
   from: Axial,
   toward: Axial,
   options: ShortestPathOptions = {},
+): Axial[] | null {
+  const any = searchShortestPath(board, from, toward, options, false);
+  if (!any) return null;
+  const steps = any.length - 1;
+  const cap = Math.min(options.maxSteps ?? steps, steps);
+  const clean = searchShortestPath(
+    board,
+    from,
+    toward,
+    { ...options, maxSteps: cap },
+    true,
+  );
+  if (clean && clean.length === any.length) return clean;
+  return any;
+}
+
+function searchShortestPath(
+  board: Board,
+  from: Axial,
+  toward: Axial,
+  options: ShortestPathOptions,
+  avoidTransitCurse: boolean,
 ): Axial[] | null {
   const allowUnstandableTarget = options.allowUnstandableTarget === true;
   const maxSteps =
@@ -138,18 +161,23 @@ export function shortestPath(
     const standNow = standOptsFor(options, curStacks);
 
     const nbrs = [...neighbors(cur)];
-    if (curseCarry) {
-      nbrs.sort((a, b) => {
-        const ac = getTile(board, a)?.kind === 'curse' ? 0 : 1;
-        const bc = getTile(board, b)?.kind === 'curse' ? 0 : 1;
-        return ac - bc;
-      });
-    }
+    nbrs.sort((a, b) => {
+      const ac = getTile(board, a)?.kind === 'curse' ? 1 : 0;
+      const bc = getTile(board, b)?.kind === 'curse' ? 1 : 0;
+      return ac - bc;
+    });
 
     for (const n of nbrs) {
       if (isAllowed && !isAllowed(n)) continue;
 
       const isTarget = equals(n, toward);
+      if (
+        avoidTransitCurse &&
+        !isTarget &&
+        getTile(board, n)?.kind === 'curse'
+      ) {
+        continue;
+      }
       const nextStacks = stacksAfterEnter(board, n, curStacks, curseCarry);
       if (nextStacks === null) continue;
 

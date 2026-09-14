@@ -51,6 +51,7 @@ export type MageCardEvent =
   | { type: 'ActorsSwapped'; aId: string; bId: string; aHex: Axial; bHex: Axial }
   | { type: 'TurnForceEnded'; reason: string }
   | { type: 'SilenceImmunityThisRound'; actorIds: string[] }
+  | { type: 'SealImmunityThisRound'; actorIds: string[] }
   | { type: 'CardDiscarded'; instanceId: string; cardId: string }
   | { type: 'AmplifyArmed' }
   | { type: 'DrawRequested'; count: number }
@@ -90,7 +91,7 @@ export type PlanarSwapResult = {
   silenced: boolean;
   /** 成功後強制結束回合。 */
   endTurn: boolean;
-  /** 被換兩人 id（成功時）；本輪不受沉默。 */
+  /** 被換兩人 id（成功時）；本輪不受沉默／封印。 */
   swappedActorIds: string[];
   /** 交換後位置：id → hex。 */
   positions?: Record<string, Axial>;

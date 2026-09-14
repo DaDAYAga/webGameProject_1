@@ -45,7 +45,7 @@ export const GUNNER_CARD_DEFS: Record<GunnerCardId, CardDefinition> = {
   },
   big_show: {
     id: 'big_show',
-    name: '來吧! 大鬧一場!',
+    name: '大鬧一場！',
     countsTowardAction: true,
     silenced: true,
     kind: ['ultimate'],

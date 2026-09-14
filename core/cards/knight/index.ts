@@ -48,6 +48,7 @@ export {
 
 export {
   TAUNT_RING_DISTANCE,
+  tauntForcesPlacement,
   tauntBlocksPlacement,
   resolveTaunt,
   type ResolveTauntInput,
@@ -56,6 +57,7 @@ export {
 export {
   resolveDevotion,
   resolveDevotionCurseTile,
+  extractCardFromLibrary,
   type ResolveDevotionInput,
   type ResolveDevotionCurseTileInput,
   type DevotionCurseTileResult,

@@ -33,10 +33,15 @@ export type PickThreatPlacementOptions = {
   bounds?: MapBounds;
   /** 單位佔格（不可鋪）。 */
   occupied?: readonly Axial[];
-  /** 嘲諷／屏障等保護格（不可鋪）。 */
+  /** 屏障等保護格（不可鋪）。嘲諷改走 forcedHexes，不再放這裡。 */
   protectedHexes?: readonly Axial[];
   /** 額外排除（本輪已選等）。 */
   exclude?: readonly Axial[];
+  /**
+   * 嘲諷等吸引限制：若其中有任何「否則可鋪」的格，整次選格只從這集合取；
+   * 一格都沒有則忽略（退回一般威脅序）。
+   */
+  forcedHexes?: readonly Axial[];
 };
 
 function defaultBounds(bounds?: MapBounds): MapBounds {
@@ -128,15 +133,24 @@ export function pickThreatPlacementHexes(
   const occupied = opts.occupied ?? [];
   const protectedHexes = opts.protectedHexes ?? [];
   const exclude = [...(opts.exclude ?? [])];
+  const forcedHexes = opts.forcedHexes ?? [];
+  const inForced = (h: Axial) => forcedHexes.some((f) => equals(f, h));
+
+  const listCandidates = (ex: readonly Axial[]) =>
+    listMapHexes(bounds).filter((h) => {
+      if (isExcluded(h, occupied, protectedHexes, ex)) return false;
+      if (getTile(board, h) !== undefined) return false;
+      return true;
+    });
+
+  const initial = listCandidates(exclude);
+  const useForced = forcedHexes.length > 0 && initial.some(inForced);
 
   const out: Axial[] = [];
   // 逐格選：每次重算分數（前一格已佔入 exclude，模擬連續鋪）
   for (let i = 0; i < n; i++) {
-    const candidates = listMapHexes(bounds).filter((h) => {
-      if (isExcluded(h, occupied, protectedHexes, exclude)) return false;
-      if (getTile(board, h) !== undefined) return false;
-      return true;
-    });
+    let candidates = listCandidates(exclude);
+    if (useForced) candidates = candidates.filter(inForced);
     if (candidates.length === 0) break;
 
     let best: Axial | null = null;

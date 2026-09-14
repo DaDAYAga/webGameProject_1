@@ -94,6 +94,8 @@ type BoardCanvasProps = {
   onReset?: () => void;
   /** 選出生點時提示。 */
   spawnHint?: string | null;
+  /** 游標停在可選格上的說明（如奉獻）。 */
+  hexHoverHint?: string | null;
   /** 地圖半徑（勿改 core DEFAULT；由此傳入）。 */
   mapRadius?: number;
   /** 右上角王牌庫 chip。 */
@@ -222,6 +224,7 @@ export function BoardCanvas({
   showSweetZone = false,
   onReset,
   spawnHint,
+  hexHoverHint,
   mapRadius = DEFAULT_MAP_RADIUS,
   bossDeckInfo,
 }: BoardCanvasProps) {
@@ -475,6 +478,11 @@ export function BoardCanvas({
       {spawnHint ? (
         <p className="spawn-hint" role="status">
           {spawnHint}
+        </p>
+      ) : null}
+      {hexHoverHint ? (
+        <p className="hex-hover-hint" role="status">
+          {hexHoverHint}
         </p>
       ) : null}
       <canvas

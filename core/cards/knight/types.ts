@@ -111,11 +111,11 @@ export type FaithResult = {
   cleared: number;
 };
 
-/** 王鋪牆限制（嘲諷等）。 */
+/** 王鋪牆限制（嘲諷等：吸引至鄰環，非禁鋪）。 */
 export type BossPlaceRestriction = {
   type: 'taunt';
   center: Axial;
-  /** 禁鋪距離（嘲諷＝鄰 1）。 */
+  /** 必須鋪的鄰距（嘲諷＝鄰 1）。 */
   ringDistance: number;
 };
 
@@ -142,7 +142,7 @@ export type DevotionResult = {
   counted: false;
   selfCurseStacks: number;
   allyCurseStacks: number;
-  /** 會致死而抽出不死存在。 */
+  /** 咒滿時上層應從牌庫抽出不死存在（非死亡路徑）。 */
   extractedUndying: boolean;
   wouldKillSelf: boolean;
 };

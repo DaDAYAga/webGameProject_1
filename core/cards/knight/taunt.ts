@@ -1,8 +1,8 @@
 /**
- * 騎士「嘲諷」×2：他人回合使用；王不可在騎士鄰 1 鋪牆。
+ * 騎士「嘲諷」×2：他人回合使用；王必須在騎士鄰 1 鋪牆（空鄰不足則退回一般威脅序）。
  * 不計次；不受沉默；無傷害。
- * 優先級 TAUNT_PRIORITY=100，高於磁力屏障 BARRIER_PRIORITY=10（衝突時嘲諷覆蓋）。
- * 見 design-amendments 2026-09-09f。
+ * 優先級 TAUNT_PRIORITY=100，高於磁力屏障 BARRIER_PRIORITY=10（衝突時嘲諷覆蓋，不把嘲諷環當保護格）。
+ * 見 design-amendments 2026-09-14i。
  */
 
 import { distance, type Axial } from '../../hex/index.js';
@@ -13,7 +13,7 @@ import type {
   TauntResult,
 } from './types.js';
 
-/** 嘲諷禁鋪距離（鄰 1）。 */
+/** 嘲諷必須鋪的鄰距（鄰 1）。 */
 export const TAUNT_RING_DISTANCE = 1;
 
 export type ResolveTauntInput = {
@@ -32,14 +32,25 @@ export type ResolveTauntInput = {
 };
 
 /**
- * 某格是否被嘲諷禁鋪（距離 center ≤ ringDistance）。
+ * 某格是否落在嘲諷必須鋪的鄰環（距離 center === ringDistance）。
  */
-export function tauntBlocksPlacement(
+export function tauntForcesPlacement(
   restriction: BossPlaceRestriction | null | undefined,
   hex: Axial,
 ): boolean {
   if (!restriction || restriction.type !== 'taunt') return false;
-  return distance(restriction.center, hex) <= restriction.ringDistance;
+  return distance(restriction.center, hex) === restriction.ringDistance;
+}
+
+/**
+ * @deprecated 嘲諷改為吸引限制，不再禁鋪。恆回 false。
+ * 請改用 tauntForcesPlacement。
+ */
+export function tauntBlocksPlacement(
+  _restriction: BossPlaceRestriction | null | undefined,
+  _hex: Axial,
+): boolean {
+  return false;
 }
 
 /**

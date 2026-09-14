@@ -36,14 +36,14 @@ const BOUNDS = { radius: DEFAULT_MAP_RADIUS };
 const DIR_EAST = { q: 1, r: 0 };
 
 describe('mageWindAllowsKind / canWindPushFrom', () => {
-  it('plain / plain_broken / curse / plain_starter 可動', () => {
+  it('plain / plain_broken / plain_starter 可動', () => {
     expect(mageWindAllowsKind('plain')).toBe(true);
     expect(mageWindAllowsKind('plain_broken')).toBe(true);
-    expect(mageWindAllowsKind('curse')).toBe(true);
     expect(mageWindAllowsKind('plain_starter')).toBe(true);
   });
 
-  it('silence / punish / mud 不可動', () => {
+  it('curse / silence / punish / mud 不可動', () => {
+    expect(mageWindAllowsKind('curse')).toBe(false);
     expect(mageWindAllowsKind('silence')).toBe(false);
     expect(mageWindAllowsKind('punish')).toBe(false);
     expect(mageWindAllowsKind('mud')).toBe(false);
@@ -93,6 +93,23 @@ describe('御風術 resolveWindControl', () => {
     expect(r.reason).toBe('cannot_move_punish');
     expect(r.stepsMoved).toBe(0);
     expect(getTile(r.board, from)?.kind).toBe('punish');
+  });
+
+  it('curse 不可動 → fail', () => {
+    let board = createEmptyBoard();
+    const from = { q: 2, r: 0 };
+    board = placeTerrain(board, from, 'curse');
+
+    expect(canWindPushFrom(board, from)).toBe(false);
+    const r = resolveWindControl({
+      board,
+      from,
+      direction: DIR_EAST,
+    });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe('cannot_move_curse');
+    expect(r.stepsMoved).toBe(0);
+    expect(getTile(r.board, from)?.kind).toBe('curse');
   });
 
   it('silence 不可動 → fail（即使 board 預設可推）', () => {
@@ -227,6 +244,10 @@ describe('位面調換 resolvePlanarSwap', () => {
     });
     expect(r.events).toContainEqual({
       type: 'SilenceImmunityThisRound',
+      actorIds: ['a', 'b'],
+    });
+    expect(r.events).toContainEqual({
+      type: 'SealImmunityThisRound',
       actorIds: ['a', 'b'],
     });
     expect(r.events).toContainEqual({

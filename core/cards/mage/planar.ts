@@ -2,6 +2,7 @@
  * 法師「位面調換」×1：交換兩名單位位置。
  * 不計次；受沉默（增幅後該張不受）；成功後強制結束回合。
  * 不可王、不可出局；可封印。兩人皆須在法師距離 ≤3。禁止壓頭／不可站格。
+ * 成功後雙方本回合不受沉默／封印（SilenceImmunityThisRound + SealImmunityThisRound）。
  */
 
 import { canStandAt, type Board } from '../../board/index.js';
@@ -99,6 +100,10 @@ export function resolvePlanarSwap(
     },
     {
       type: 'SilenceImmunityThisRound',
+      actorIds: [actorA.id, actorB.id],
+    },
+    {
+      type: 'SealImmunityThisRound',
       actorIds: [actorA.id, actorB.id],
     },
     {

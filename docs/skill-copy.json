@@ -1,0 +1,419 @@
+{
+  "version": "2026-09-14g",
+  "note": "改 sideHint / sideEffects / how。id、classId、flags 不要改。被動在 passives。改完整份丟回來。",
+  "styleGuide": "口語繁中。短標 → 效果 → 用法。限制一律放 how 最後「限制：…」。sideHint 盡量 10 字內，不要寫限制。",
+  "skills": [
+    {
+      "id": "shot",
+      "classId": "gunner",
+      "className": "槍手",
+      "name": "射擊",
+      "tier": "basic",
+      "deckCopiesDefault": 5,
+      "sideHint": "遠程一般攻擊",
+      "sideEffects": "對王打 1 點。離王超過 3 格少 1 點，最少還是 1。",
+      "how": "有氣瓶就這一槍一起算，打完瓶子清空。大招送的那一槍不花行動點，也不吃距離懲罰。限制：只打王；任意距離、無擋線。",
+      "flags": {
+        "countsAsAction": true,
+        "silenceImmune": false,
+        "endsTurn": false,
+        "requiresNoMove": false,
+        "requiresSealed": false,
+        "otherRestrictions": [
+          "只打王",
+          "任意距離、無擋線"
+        ]
+      }
+    },
+    {
+      "id": "playful_bottle",
+      "classId": "gunner",
+      "className": "槍手",
+      "name": "頑皮氣瓶",
+      "tier": "small",
+      "deckCopiesDefault": 2,
+      "sideHint": "下一槍多傷",
+      "sideEffects": "丟掉手上 1 張射擊，裝進瓶子。下次射擊多打 1 點。",
+      "how": "限制：手上要有射擊才能出；三種氣瓶合計最多 2 支（大招可超）。",
+      "flags": {
+        "countsAsAction": true,
+        "silenceImmune": false,
+        "endsTurn": false,
+        "requiresNoMove": false,
+        "requiresSealed": false,
+        "otherRestrictions": [
+          "手上須有射擊可棄",
+          "氣瓶合計上限 2（大招可超）"
+        ]
+      }
+    },
+    {
+      "id": "mischief_bottle",
+      "classId": "gunner",
+      "className": "槍手",
+      "name": "胡鬧氣瓶",
+      "tier": "small",
+      "deckCopiesDefault": 2,
+      "sideHint": "下一槍多抽",
+      "sideEffects": "裝進瓶子。下次射擊結束後多抽 n 張（n＝胡鬧層數）。",
+      "how": "限制：三種氣瓶合計最多 2 支（大招可超）。",
+      "flags": {
+        "countsAsAction": true,
+        "silenceImmune": false,
+        "endsTurn": false,
+        "requiresNoMove": false,
+        "requiresSealed": false,
+        "otherRestrictions": [
+          "氣瓶合計上限 2（大招可超）"
+        ]
+      }
+    },
+    {
+      "id": "turbulence",
+      "classId": "gunner",
+      "className": "槍手",
+      "name": "大亂流",
+      "tier": "small",
+      "deckCopiesDefault": 2,
+      "sideHint": "丟氣瓶換步數",
+      "sideEffects": "最多丟掉手上 2 張氣瓶，多走 n＋1 步（n＝丟掉張數）。",
+      "how": "點一個剛好那麼多步、站得上去的格子。限制：可棄 0～2 張任意氣瓶；路被牆擋住或不可站就不行。",
+      "flags": {
+        "countsAsAction": true,
+        "silenceImmune": false,
+        "endsTurn": false,
+        "requiresNoMove": false,
+        "requiresSealed": false,
+        "otherRestrictions": [
+          "可棄 0～2 張任意氣瓶",
+          "路徑須可站"
+        ]
+      }
+    },
+    {
+      "id": "power_up",
+      "classId": "gunner",
+      "className": "槍手",
+      "name": "狂妄氣瓶",
+      "tier": "small",
+      "deckCopiesDefault": 2,
+      "sideHint": "下一槍推格子",
+      "sideEffects": "裝進瓶子。下次射擊結束後，從身邊選 n 格各往外推直線 1 格（n＝狂妄層數）。",
+      "how": "只能推一般格。推過去撞到已有格會破碎，已破碎再撞會破壞（不傷王）。推不動就跳過。限制：三種氣瓶合計最多 2 支（大招可超）。",
+      "flags": {
+        "countsAsAction": true,
+        "silenceImmune": false,
+        "endsTurn": false,
+        "requiresNoMove": false,
+        "requiresSealed": false,
+        "otherRestrictions": [
+          "氣瓶合計上限 2（大招可超）",
+          "破碎不傷王"
+        ]
+      }
+    },
+    {
+      "id": "big_show",
+      "classId": "gunner",
+      "className": "槍手",
+      "name": "大鬧一場！",
+      "tier": "ultimate",
+      "deckCopiesDefault": 1,
+      "sideHint": "補三瓶再開槍",
+      "sideEffects": "白塞頑皮、胡鬧、狂妄各 1 層（可超過 2 支上限）。手上有射擊的話，可選擇打一槍且無視距離懲罰。",
+      "how": "限制：這回合還沒走動才能出；後面那一槍不計次。",
+      "flags": {
+        "countsAsAction": true,
+        "silenceImmune": false,
+        "endsTurn": false,
+        "requiresNoMove": true,
+        "requiresSealed": false,
+        "otherRestrictions": [
+          "須尚未移動",
+          "後續射擊不計次、無視距離懲罰"
+        ]
+      }
+    },
+    {
+      "id": "magic_arrow",
+      "classId": "mage",
+      "className": "法師",
+      "name": "魔法箭",
+      "tier": "basic",
+      "deckCopiesDefault": 5,
+      "sideHint": "遠程一般攻擊",
+      "sideEffects": "對王打 1 點。離王超過 3 格少 1 點，最少還是 1。",
+      "how": "有強能增幅這一箭多 1 點，然後增幅消失。限制：只打王；任意距離、無擋線。",
+      "flags": {
+        "countsAsAction": true,
+        "silenceImmune": false,
+        "endsTurn": false,
+        "requiresNoMove": false,
+        "requiresSealed": false,
+        "otherRestrictions": [
+          "只打王",
+          "任意距離、無擋線"
+        ]
+      }
+    },
+    {
+      "id": "amplify",
+      "classId": "mage",
+      "className": "法師",
+      "name": "強能增幅",
+      "tier": "small",
+      "deckCopiesDefault": 2,
+      "sideHint": "下一招變強",
+      "sideEffects": "下一張可增幅卡變強。",
+      "how": "不用丟牌。可增幅：魔法箭、御風、聚精會神、磁力屏障、位面調換。用掉就沒了。限制：回合結束還沒用就失效。",
+      "flags": {
+        "countsAsAction": false,
+        "silenceImmune": false,
+        "endsTurn": false,
+        "requiresNoMove": false,
+        "requiresSealed": false,
+        "otherRestrictions": [
+          "未用則回合結束失效"
+        ]
+      }
+    },
+    {
+      "id": "wind",
+      "classId": "mage",
+      "className": "法師",
+      "name": "御風術",
+      "tier": "small",
+      "deckCopiesDefault": 2,
+      "sideHint": "推一格",
+      "sideEffects": "把一格往指定方向推。增幅時多推 1 步。",
+      "how": "先點要推的格，再點旁邊決定方向，一路推到推不動。限制：沉默、詛咒、懲罰、泥濘不能推。",
+      "flags": {
+        "countsAsAction": true,
+        "silenceImmune": false,
+        "endsTurn": false,
+        "requiresNoMove": false,
+        "requiresSealed": false,
+        "otherRestrictions": [
+          "不可推沉默、詛咒、懲罰、泥濘"
+        ]
+      }
+    },
+    {
+      "id": "focus",
+      "classId": "mage",
+      "className": "法師",
+      "name": "聚精會神",
+      "tier": "small",
+      "deckCopiesDefault": 2,
+      "sideHint": "抽牌後結束",
+      "sideEffects": "抽 2 張，這個職業這回合結束。",
+      "how": "增幅時改抽 3 張。手牌超過上限就丟掉最新抽到的。限制：出完強制結束回合。",
+      "flags": {
+        "countsAsAction": false,
+        "silenceImmune": false,
+        "endsTurn": true,
+        "requiresNoMove": false,
+        "requiresSealed": false,
+        "otherRestrictions": [
+          "出完結束回合"
+        ]
+      }
+    },
+    {
+      "id": "barrier",
+      "classId": "mage",
+      "className": "法師",
+      "name": "磁力屏障",
+      "tier": "small",
+      "deckCopiesDefault": 2,
+      "sideHint": "擋住王鋪牆",
+      "sideEffects": "王不能在目標鄰 1 格鋪牆。下一輪不能再出這張。",
+      "how": "沒增幅保護自己。增幅時改寄給距離 ≤3 的隊友（不能寄自己）。限制：成功後下一回合不可再出屏障；優先級低於嘲諷，衝突時嘲諷覆蓋。",
+      "flags": {
+        "countsAsAction": true,
+        "silenceImmune": false,
+        "endsTurn": false,
+        "requiresNoMove": false,
+        "requiresSealed": false,
+        "otherRestrictions": [
+          "下一回合不可再出屏障",
+          "優先級低於嘲諷"
+        ]
+      }
+    },
+    {
+      "id": "planar_swap",
+      "classId": "mage",
+      "className": "法師",
+      "name": "位面調換",
+      "tier": "ultimate",
+      "deckCopiesDefault": 1,
+      "sideHint": "跟隊友換位子",
+      "sideEffects": "跟距離 ≤3 的友方換位子。換位後雙方本回合不受沉默、也不受封印。出完強制結束回合。",
+      "how": "點要換的隊友。增幅時這張本身不受沉默。限制：不可換王；雙方落點都要站得上去。",
+      "flags": {
+        "countsAsAction": false,
+        "silenceImmune": false,
+        "endsTurn": true,
+        "requiresNoMove": false,
+        "requiresSealed": false,
+        "otherRestrictions": [
+          "不可換王",
+          "落點須可站",
+          "出完結束回合"
+        ]
+      }
+    },
+    {
+      "id": "attack",
+      "classId": "knight",
+      "className": "騎士",
+      "name": "攻擊",
+      "tier": "basic",
+      "deckCopiesDefault": 5,
+      "sideHint": "近戰一般攻擊",
+      "sideEffects": "打鄰 1 的王或一般格。打王 2 點。一般格先破碎，已破碎再打會破壞；若該格已老化，破壞時王再吃 1 點。",
+      "how": "出牌後點高亮格子。限制：必須鄰 1；不能打其他職業、詛咒、沉默、懲罰、泥濘。",
+      "flags": {
+        "countsAsAction": true,
+        "silenceImmune": false,
+        "endsTurn": false,
+        "requiresNoMove": false,
+        "requiresSealed": false,
+        "otherRestrictions": [
+          "須鄰 1",
+          "不可指定其他職業、詛咒、沉默、懲罰、泥濘"
+        ]
+      }
+    },
+    {
+      "id": "faith",
+      "classId": "knight",
+      "className": "騎士",
+      "name": "堅定信仰",
+      "tier": "small",
+      "deckCopiesDefault": 2,
+      "sideHint": "清咒",
+      "sideEffects": "清掉自己 1 層詛咒。",
+      "how": "限制：這回合還沒走動才能出。",
+      "flags": {
+        "countsAsAction": true,
+        "silenceImmune": false,
+        "endsTurn": false,
+        "requiresNoMove": true,
+        "requiresSealed": false,
+        "otherRestrictions": [
+          "須尚未移動"
+        ]
+      }
+    },
+    {
+      "id": "heroic_charge",
+      "classId": "knight",
+      "className": "騎士",
+      "name": "英勇衝鋒",
+      "tier": "small",
+      "deckCopiesDefault": 2,
+      "sideHint": "直線衝刺",
+      "sideEffects": "沿直線往前衝。老化牆會被撞破並繼續衝；撞到完整牆、沉默、王、地圖邊緣會停。撞碎已老化的牆，王吃 1 點（牆傷最多 2）；撞到王再打 2 點。整次最多 4 點。出完強制結束回合。",
+      "how": "點直線上任一格決定方向。限制：成功或失敗都結束回合。",
+      "flags": {
+        "countsAsAction": true,
+        "silenceImmune": false,
+        "endsTurn": true,
+        "requiresNoMove": false,
+        "requiresSealed": false,
+        "otherRestrictions": [
+          "出完結束回合"
+        ]
+      }
+    },
+    {
+      "id": "taunt",
+      "classId": "knight",
+      "className": "騎士",
+      "name": "嘲諷",
+      "tier": "small",
+      "deckCopiesDefault": 2,
+      "sideHint": "逼王貼著鋪",
+      "sideEffects": "王必須在你鄰 1 格鋪牆。",
+      "how": "這版用旁邊勾選假裝，不能主動當手牌打出去，只能在他人回合生效。限制：須他人回合；優先級高於磁力屏障，衝突時覆蓋屏障。",
+      "flags": {
+        "countsAsAction": false,
+        "silenceImmune": true,
+        "endsTurn": false,
+        "requiresNoMove": false,
+        "requiresSealed": false,
+        "otherRestrictions": [
+          "須他人回合",
+          "優先級高於磁力屏障"
+        ]
+      }
+    },
+    {
+      "id": "devotion",
+      "classId": "knight",
+      "className": "騎士",
+      "name": "奉獻",
+      "tier": "small",
+      "deckCopiesDefault": 2,
+      "sideHint": "吸鄰咒",
+      "sideEffects": "從鄰 1 隊友吸 1 層詛咒，或吃掉鄰 1 的詛咒格（層數加到自己）。",
+      "how": "點隊友或詛咒格。若因此咒滿：周圍鋪一般並封印，並從自己牌庫抽出「不死存在」；牌庫沒有這張就抽不到。限制：目標必須鄰 1。",
+      "flags": {
+        "countsAsAction": false,
+        "silenceImmune": false,
+        "endsTurn": false,
+        "requiresNoMove": false,
+        "requiresSealed": false,
+        "otherRestrictions": [
+          "目標須鄰 1"
+        ]
+      }
+    },
+    {
+      "id": "undying",
+      "classId": "knight",
+      "className": "騎士",
+      "name": "不死存在",
+      "tier": "ultimate",
+      "deckCopiesDefault": 1,
+      "sideHint": "逃離封印",
+      "sideEffects": "被封印時才能出。在地圖上選一格站得上去的地方跳過去，身邊地形不動。出完強制結束回合。",
+      "how": "旁邊有沉默也擋不住這張。落地後如果六格又被圍滿，會再被封。限制：封印中才能出。",
+      "flags": {
+        "countsAsAction": false,
+        "silenceImmune": true,
+        "endsTurn": true,
+        "requiresNoMove": false,
+        "requiresSealed": true,
+        "otherRestrictions": [
+          "封印中才能出",
+          "出完結束回合"
+        ]
+      }
+    }
+  ],
+  "passives": [
+    {
+      "id": "knight_curse_cap",
+      "classId": "knight",
+      "className": "騎士",
+      "name": "多踩一格",
+      "kind": "passive",
+      "sideHint": "詛咒上限 2",
+      "sideEffects": "別人帶 1 層詛咒就滿，你能帶到 2 層才咒滿。",
+      "how": "不用出牌。走路踩到詛咒格會上身並清掉那格。限制：不是手牌，不會進牌庫。",
+      "flags": {
+        "countsAsAction": false,
+        "silenceImmune": true,
+        "endsTurn": false,
+        "requiresNoMove": false,
+        "requiresSealed": false,
+        "otherRestrictions": [
+          "不是手牌"
+        ]
+      }
+    }
+  ]
+}

@@ -35,7 +35,7 @@ describe('pickThreatPlacementHexes', () => {
     }
   });
 
-  it('尊重 protectedHexes（嘲諷／屏障）', () => {
+  it('尊重 protectedHexes（屏障仍擋）', () => {
     const board = createEmptyBoard();
     const actors: ThreatActor[] = [
       { id: 'k', hex: { q: 2, r: 0 }, role: 'melee' },
@@ -56,6 +56,30 @@ describe('pickThreatPlacementHexes', () => {
     expect(picks.length).toBe(1);
     const p = picks[0]!;
     expect(protectedHexes.some((h) => h.q === p.q && h.r === p.r)).toBe(false);
+  });
+
+  it('forcedHexes 限制選格；無有效則忽略', () => {
+    const board = createEmptyBoard();
+    const actors: ThreatActor[] = [
+      { id: 'k', hex: { q: 2, r: 0 }, role: 'melee' },
+    ];
+    const forced = [{ q: 3, r: 0 }];
+    const picks = pickThreatPlacementHexes(board, actors, 2, {
+      bounds,
+      occupied: [actors[0]!.hex],
+      forcedHexes: forced,
+    });
+    expect(picks.length).toBe(1);
+    expect(picks[0]).toEqual({ q: 3, r: 0 });
+
+    let blocked = placeTerrain(createEmptyBoard(), { q: 3, r: 0 }, 'plain');
+    const fallback = pickThreatPlacementHexes(blocked, actors, 1, {
+      bounds,
+      occupied: [actors[0]!.hex],
+      forcedHexes: [{ q: 3, r: 0 }],
+    });
+    expect(fallback.length).toBe(1);
+    expect(fallback[0]).not.toEqual({ q: 3, r: 0 });
   });
 
   it('瀕封格（5／6）優先於一般鄰格', () => {
