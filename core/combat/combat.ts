@@ -132,6 +132,12 @@ export function bossDamagedEventFromMelee(
 export function applyTerrainHit(board: Board, hex: Axial): TerrainCombatResult {
   const hit = crackTile(board, hex);
   const events: CombatEvent[] = [];
+  if (hit.ok && hit.cracked) {
+    events.push({ type: 'TerrainCracked', hex });
+  }
+  if (hit.ok && hit.destroyed) {
+    events.push({ type: 'TerrainDestroyed', hex });
+  }
   const bossDamaged = hit.destroyed && hit.damagesBoss;
   if (bossDamaged) {
     events.push({

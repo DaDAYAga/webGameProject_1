@@ -35,6 +35,8 @@ import {
   resolveWindControl,
   canWindPushFrom,
   BARRIER_RETARGET_MAX_DIST,
+  PLANAR_SWAP_MAX_DISTANCE,
+  PLANAR_SWAP_AMPLIFY_RANGE_BONUS,
   type BarrierAura,
   type MageCardId,
   type MageCardInstance,
@@ -74,6 +76,7 @@ import {
 import {
   DEFAULT_MAP_RADIUS,
   isSealed,
+  listMapHexes,
 } from '@core/enclosure/index.js';
 import {
   advanceWallAging,
@@ -369,9 +372,13 @@ const TURN_MOVES_PER_ROUND = 2;
 const TURN_ACTIONS_PER_ROUND = 1;
 const PUNISH_PER_ZERO_DAMAGE = 2;
 
-const COLOR_ACT = { fill: '#3d7ea6', stroke: '#7ec8ff' };
 const COLOR_SEL = { fill: '#3d8a5a', stroke: '#a0e8b0' };
-const COLOR_END = { fill: '#5a5a5a', stroke: '#9a9a9a' };
+const COLOR_END = { fill: '#4a4a4a', stroke: '#8a8a8a' };
+const CLASS_PAINT: Record<ClassId, { fill: string; stroke: string }> = {
+  knight: { fill: '#5c4a28', stroke: '#e0c078' },
+  gunner: { fill: '#2a4a5c', stroke: '#7ec4e8' },
+  mage: { fill: '#3a2a54', stroke: '#c4a0ff' },
+};
 
 type ClassActor = {
   hex: Axial;
@@ -394,6 +401,16 @@ type ClassActor = {
   silenceImmuneThisRound: boolean;
   /** 位面調換：本回合不因六鄰滿再封印。 */
   sealImmuneThisRound: boolean;
+  /** 本回合已移動或出牌 → 必須結束才能換人。 */
+  actedThisTurn: boolean;
+  /** 本回合已出過牌（移動後再出則鎖剩餘步數）。 */
+  hasPlayedThisTurn: boolean;
+  /** 上一回合出過屏障，本回合不可再出。 */
+  barrierOnCooldown: boolean;
+  /** 本回合出過屏障，輪末轉成 onCooldown。 */
+  barrierCooldownPending: boolean;
+  /** 大招後等那一槍（或結束放棄）。 */
+  bigShowAwaitingShot: boolean;
 };
 
 type Actors = Record<ClassId, ClassActor>;
@@ -415,7 +432,19 @@ type PendingPlay =
       kind: 'arrogant_push';
       remaining: number;
       gunnerHex: Axial;
-    };
+      bossDamage: number;
+      endTurnAfter?: boolean;
+    }
+  | { kind: 'planar_swap'; card: HandCard };
+
+type PendingBossPlace = {
+  liveBoard: Board;
+  extraExclude: Axial[];
+  liveActors: Actors;
+  extraAgeKeys: string[];
+  hpAfter: number;
+  sourceId: ClassId;
+};
 
 type Phase = 'playing' | 'spawn-pick' | 'reset-setup';
 
@@ -603,6 +632,11 @@ function freshActor(
     eliminated: false,
     silenceImmuneThisRound: false,
     sealImmuneThisRound: false,
+    actedThisTurn: false,
+    hasPlayedThisTurn: false,
+    barrierOnCooldown: false,
+    barrierCooldownPending: false,
+    bigShowAwaitingShot: false,
   };
 }
 
@@ -694,8 +728,9 @@ function pendingHint(p: PendingPlay | null): string {
   if (p.kind === 'devotion') return '指定鄰 1：友軍（有咒）或詛咒地形';
   if (p.kind === 'attack') return '指定鄰 1：王或可拆牆（不能打其他職業）';
   if (p.kind === 'arrogant_push') {
-    return `狂妄推牆：再點 ${p.remaining} 個鄰格（徑向推 1）`;
+    return `狂妄推牆：再點 ${p.remaining} 個鄰格（徑向推 1；推完王才鋪）`;
   }
+  if (p.kind === 'planar_swap') return '指定換位友軍（點範圍內棋子）';
   return '';
 }
 
@@ -790,6 +825,22 @@ function toThreatActors(actors: Actors): ThreatActor[] {
     role: id === 'knight' ? 'melee' : 'ranged',
     curseStacks: actors[id].curseStacks,
   }));
+}
+
+function withPlayFlags(
+  a: ClassActor,
+  extra: Partial<ClassActor> = {},
+  opts?: { lockMoves?: boolean },
+): ClassActor {
+  const merged = { ...a, ...extra };
+  const lock = opts?.lockMoves === true || merged.hasMovedThisTurn;
+  return {
+    ...merged,
+    actedThisTurn: true,
+    hasPlayedThisTurn: true,
+    movesLeft: lock ? 0 : merged.movesLeft,
+    moveLocked: false,
+  };
 }
 
 function markEliminated(actor: ClassActor): ClassActor {
@@ -893,6 +944,58 @@ function pathOptsFor(
   };
 }
 
+function nextActionableId(from: ClassId, snap: Actors): ClassId | null {
+  const start = CLASS_ORDER.indexOf(from);
+  for (let i = 1; i <= CLASS_ORDER.length; i++) {
+    const id = CLASS_ORDER[(start + i) % CLASS_ORDER.length]!;
+    const a = snap[id];
+    if (!a.eliminated && !a.endedThisRound) return id;
+  }
+  return null;
+}
+
+function knightCanOfferTaunt(snap: Actors): boolean {
+  const k = snap.knight;
+  if (k.eliminated) return false;
+  if (k.sealed && !k.sealImmuneThisRound) return false;
+  return k.hand.some((c) => c.cardId === 'taunt');
+}
+
+function firstActionableId(snap: Actors): ClassId | null {
+  return CLASS_ORDER.find((id) => !snap[id].eliminated && !snap[id].endedThisRound) ?? null;
+}
+
+function planarRange(amplified: boolean): number {
+  return (
+    PLANAR_SWAP_MAX_DISTANCE + (amplified ? PLANAR_SWAP_AMPLIFY_RANGE_BONUS : 0)
+  );
+}
+
+function uniqueHexes(list: readonly Axial[]): Axial[] {
+  const seen = new Set<string>();
+  const out: Axial[] = [];
+  for (const h of list) {
+    const k = `${h.q},${h.r}`;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(h);
+  }
+  return out;
+}
+
+function chargeRayHexes(from: Axial, radius: number): Axial[] {
+  const out: Axial[] = [];
+  for (const dir of AXIAL_DIRECTIONS) {
+    let cur = from;
+    for (let i = 0; i < radius * 2 + 2; i++) {
+      cur = add(cur, dir);
+      if (distance(cur, BOSS_HEX) > radius) break;
+      out.push(cur);
+    }
+  }
+  return out;
+}
+
 const INITIAL_HEXES = { ...START_HEX };
 const INITIAL_ACTORS = bootActors(INITIAL_HEXES);
 
@@ -959,9 +1062,13 @@ export function App() {
   const [hoverHex, setHoverHex] = useState<Axial | null>(null);
   const [hoveredCard, setHoveredCard] = useState<HandCard | null>(null);
   const [barrierAura, setBarrierAura] = useState<BarrierAura | null>(null);
+  const barrierAuraRef = useRef(barrierAura);
+  barrierAuraRef.current = barrierAura;
   const [tauntRestriction, setTauntRestriction] =
     useState<BossPlaceRestriction | null>(null);
-  const [isOthersTurn, setIsOthersTurn] = useState(false);
+  const tauntRestrictionRef = useRef(tauntRestriction);
+  tauntRestrictionRef.current = tauntRestriction;
+  const [tauntOffer, setTauntOffer] = useState<PendingBossPlace | null>(null);
   const [endConfirmFor, setEndConfirmFor] = useState<ClassId | null>(null);
   const [lastDraw, setLastDraw] = useState('');
 
@@ -1035,12 +1142,225 @@ export function App() {
   }, [actors, board, me.endedThisRound, pendingPlay, phase, selected, unitHex]);
 
   const devotionHoverHint = useMemo(() => {
-    if (!devotionTargets || !hoverHex) return null;
-    const hit = devotionTargets.find((t) => equals(t.hex, hoverHex));
+    const preview =
+      pendingPlay?.kind === 'devotion'
+        ? devotionTargets
+        : hoveredCard?.cardId === 'devotion' && !pendingPlay
+          ? listDevotionTargets(board, unitHex, actors, selected)
+          : null;
+    if (!preview || !hoverHex) return null;
+    const hit = preview.find((t) => equals(t.hex, hoverHex));
     return devotionHoverText(hit, actors, selected);
-  }, [actors, devotionTargets, hoverHex, selected]);
+  }, [
+    actors,
+    board,
+    devotionTargets,
+    hoverHex,
+    hoveredCard?.cardId,
+    pendingPlay,
+    selected,
+    unitHex,
+  ]);
 
-  const targetHexes = attackTargets ?? devotionTargets?.map((t) => t.hex) ?? null;
+  const pendingTargets = useMemo((): Axial[] | null => {
+    if (phase !== 'playing' || me.endedThisRound || me.eliminated) return null;
+    if (!pendingPlay) return null;
+    if (pendingPlay.kind === 'attack') return attackTargets;
+    if (pendingPlay.kind === 'devotion') {
+      return devotionTargets?.map((t) => t.hex) ?? null;
+    }
+    if (pendingPlay.kind === 'wind_from') {
+      return listMapHexes({ radius: mapRadius }).filter((h) =>
+        canWindPushFrom(board, h),
+      );
+    }
+    if (pendingPlay.kind === 'wind_to') {
+      return neighbors(pendingPlay.from);
+    }
+    if (pendingPlay.kind === 'undying') {
+      const occ = occupiedExcept(actors, selected);
+      return listMapHexes({ radius: mapRadius }).filter(
+        (h) =>
+          !equals(h, BOSS_HEX) &&
+          canStandAt(board, h, { occupied: occ }),
+      );
+    }
+    if (pendingPlay.kind === 'planar_swap') {
+      const maxDist = planarRange(me.amplifiedPending);
+      return CLASS_ORDER.filter(
+        (id) =>
+          id !== selected &&
+          !actors[id].eliminated &&
+          distance(unitHex, actors[id].hex) <= maxDist,
+      ).map((id) => actors[id].hex);
+    }
+    if (pendingPlay.kind === 'heroic_charge') {
+      return chargeRayHexes(unitHex, mapRadius);
+    }
+    if (pendingPlay.kind === 'arrogant_push') {
+      return neighbors(pendingPlay.gunnerHex);
+    }
+    if (pendingPlay.kind === 'turbulence') {
+      const opts = pathOptsFor(actors, selected);
+      return listMapHexes({ radius: mapRadius }).filter((h) => {
+        const path = shortestPath(board, unitHex, h, opts);
+        if (!path) return false;
+        return path.length - 1 === pendingPlay.steps;
+      });
+    }
+    return null;
+  }, [
+    attackTargets,
+    actors,
+    board,
+    devotionTargets,
+    mapRadius,
+    me.amplifiedPending,
+    me.eliminated,
+    me.endedThisRound,
+    pendingPlay,
+    phase,
+    selected,
+    unitHex,
+  ]);
+
+  const cardPreview = useMemo((): {
+    targets: Axial[] | null;
+    barrier: Axial[] | null;
+  } => {
+    const none = { targets: null, barrier: null };
+    if (phase !== 'playing' || pendingPlay) return none;
+    if (me.endedThisRound || me.eliminated) return none;
+    const id = hoveredCard?.cardId;
+    if (!id) return none;
+    if (id === 'attack') {
+      return {
+        targets: listKnightAttackTargets(board, unitHex, actors, selected),
+        barrier: null,
+      };
+    }
+    if (id === 'devotion') {
+      return {
+        targets: listDevotionTargets(board, unitHex, actors, selected).map(
+          (t) => t.hex,
+        ),
+        barrier: null,
+      };
+    }
+    if (id === 'barrier') {
+      if (me.barrierOnCooldown) return none;
+      if (me.amplifiedPending) {
+        const allies = CLASS_ORDER.filter(
+          (cid) =>
+            cid !== selected &&
+            !actors[cid].eliminated &&
+            distance(unitHex, actors[cid].hex) <= BARRIER_RETARGET_MAX_DIST,
+        );
+        if (allies.length === 0) return none;
+        return {
+          targets: allies.map((cid) => actors[cid].hex),
+          barrier: uniqueHexes(
+            allies.flatMap((cid) => neighbors(actors[cid].hex)),
+          ),
+        };
+      }
+      return { targets: null, barrier: neighbors(unitHex) };
+    }
+    if (id === 'heroic_charge') {
+      return { targets: chargeRayHexes(unitHex, mapRadius), barrier: null };
+    }
+    if (id === 'undying') {
+      if (!me.sealed) return none;
+      const occ = occupiedExcept(actors, selected);
+      return {
+        targets: listMapHexes({ radius: mapRadius }).filter(
+          (h) => !equals(h, BOSS_HEX) && canStandAt(board, h, { occupied: occ }),
+        ),
+        barrier: null,
+      };
+    }
+    if (id === 'taunt') {
+      return { targets: neighbors(unitHex), barrier: null };
+    }
+    if (id === 'wind') {
+      return {
+        targets: listMapHexes({ radius: mapRadius }).filter((h) =>
+          canWindPushFrom(board, h),
+        ),
+        barrier: null,
+      };
+    }
+    return none;
+  }, [
+    actors,
+    board,
+    hoveredCard?.cardId,
+    mapRadius,
+    me.amplifiedPending,
+    me.barrierOnCooldown,
+    me.eliminated,
+    me.endedThisRound,
+    me.sealed,
+    pendingPlay,
+    phase,
+    selected,
+    unitHex,
+  ]);
+
+  const targetHexes = pendingTargets ?? cardPreview.targets;
+
+  const legalHexes = useMemo((): Axial[] | null => {
+    if (phase !== 'playing' || pendingPlay) return null;
+    if (cardPreview.targets || cardPreview.barrier) return null;
+    if (
+      hoveredCard?.cardId === 'planar_swap' ||
+      hoveredCard?.cardId === 'shot' ||
+      hoveredCard?.cardId === 'magic_arrow'
+    ) {
+      return null;
+    }
+    if (me.endedThisRound || me.eliminated || me.sealed) return null;
+    if (movesLeft <= 0) return null;
+    const opts = pathOptsFor(actors, selected);
+    const out: Axial[] = [];
+    for (const h of listMapHexes({ radius: mapRadius })) {
+      if (equals(h, unitHex)) continue;
+      const path = shortestPath(board, unitHex, h, opts);
+      if (!path) continue;
+      const steps = path.length - 1;
+      if (steps >= 1 && steps <= movesLeft) out.push(h);
+    }
+    return out;
+  }, [
+    actors,
+    board,
+    mapRadius,
+    me.eliminated,
+    me.endedThisRound,
+    me.sealed,
+    movesLeft,
+    pendingPlay,
+    phase,
+    selected,
+    unitHex,
+    cardPreview.targets,
+    cardPreview.barrier,
+    hoveredCard?.cardId,
+  ]);
+
+  const barrierHexes = useMemo(() => {
+    const active = barrierAura?.protectedHexes ?? [];
+    const preview = cardPreview.barrier ?? [];
+    const merged = uniqueHexes([...active, ...preview]);
+    return merged.length > 0 ? merged : null;
+  }, [barrierAura, cardPreview.barrier]);
+
+  const planarHoverRange =
+    hoveredCard?.cardId === 'planar_swap' && phase === 'playing'
+      ? planarRange(me.amplifiedPending)
+      : pendingPlay?.kind === 'planar_swap'
+        ? planarRange(me.amplifiedPending)
+        : null;
 
   const showSweetZone =
     hoveredCard?.cardId === 'shot' || hoveredCard?.cardId === 'magic_arrow';
@@ -1054,17 +1374,16 @@ export function App() {
     (id) => !actors[id].eliminated,
   ).map((id) => {
     const a = actors[id];
-    const colors = a.endedThisRound
+    const paint = a.endedThisRound || a.eliminated
       ? COLOR_END
-      : id === selected
-        ? COLOR_SEL
-        : COLOR_ACT;
+      : CLASS_PAINT[id];
+    const selectedStroke = id === selected && !a.endedThisRound ? '#f2f0e4' : paint.stroke;
     return {
       id,
       label: pieceLabel(id),
       hex: a.hex,
-      fill: colors.fill,
-      stroke: colors.stroke,
+      fill: paint.fill,
+      stroke: selectedStroke,
       curseStacks: a.curseStacks,
       sealed: a.sealed,
       eliminated: false,
@@ -1255,7 +1574,14 @@ export function App() {
   }
 
   function clearPending(note?: string) {
+    const p = pendingPlay;
     setPendingPlay(null);
+    if (p?.kind === 'arrogant_push') {
+      noteBossDamage(p.bossDamage, board, [], actorsRef.current);
+      if (p.endTurnAfter) {
+        endTurn('大招射擊後結束', { force: true, actorsNow: actorsRef.current });
+      }
+    }
     if (note) {
       pushLog(note);
       setToast(note);
@@ -1263,6 +1589,23 @@ export function App() {
   }
 
   function selectClass(id: ClassId) {
+    if (tauntOffer) {
+      setToast('請先決定是否使用嘲諷');
+      return;
+    }
+    if (id !== selected) {
+      const cur = actors[selected];
+      if (
+        cur.actedThisTurn &&
+        !cur.endedThisRound &&
+        !cur.eliminated &&
+        phase === 'playing'
+      ) {
+        setToast('請先結束本角色回合再換人');
+        pushLog(`【選取】拒絕：${classLabel(selected)} 已行動，須結束回合`);
+        return;
+      }
+    }
     setSelected(id);
     setPendingPlay(null);
     setEndConfirmFor(null);
@@ -1275,16 +1618,18 @@ export function App() {
     }
   }
 
-  /** 有效傷王：扣 HP＋抽王牌庫 N 格並依地形袋鋪放。 */
+  /** 有效傷王：扣 HP；非騎士來源且騎士有嘲諷則先問，再抽王牌鋪放。 */
   function noteBossDamage(
     amount: number,
     liveBoard: Board = board,
     extraExclude: Axial[] = [],
     liveActors?: Actors,
     extraAgeKeys: string[] = [],
+    sourceId: ClassId = selected,
   ) {
     if (amount <= 0 || won || lost) return;
-    const actorsForThreat = liveActors ?? actors;
+    if (tauntOffer) return;
+    const actorsForThreat = liveActors ?? actorsRef.current;
     setBossDamagedThisRound(true);
     const hpAfter = Math.max(0, bossHp - amount);
     setBossHp(hpAfter);
@@ -1292,8 +1637,33 @@ export function App() {
       setWon(true);
       setToast('勝利：王 HP ≤ 0');
       setLog((prev) => [...prev, '【勝利】王 HP ≤ 0，停止繼續操作']);
+      return;
     }
 
+    const pending: PendingBossPlace = {
+      liveBoard,
+      extraExclude,
+      liveActors: actorsForThreat,
+      extraAgeKeys,
+      hpAfter,
+      sourceId,
+    };
+    if (
+      sourceId !== 'knight' &&
+      knightCanOfferTaunt(actorsForThreat) &&
+      tauntRestrictionRef.current?.type !== 'taunt'
+    ) {
+      setTauntOffer(pending);
+      pushLog('【嘲諷】隊友傷王：要不要讓王鋪在騎士鄰 1？');
+      setToast('騎士：要使用嘲諷嗎？');
+      return;
+    }
+    placeBossFromPending(pending);
+  }
+
+  function placeBossFromPending(pending: PendingBossPlace) {
+    const { liveBoard, extraExclude, liveActors, extraAgeKeys, hpAfter } =
+      pending;
     const deckNow = bossDeckRef.current;
     if (deckNow.length === 0) {
       pushLog('【王】牌盡（無法再抽鋪放）');
@@ -1310,8 +1680,11 @@ export function App() {
     bossDeckRef.current = restDeck;
     setBossDeck(restDeck);
 
-    const protectedHexes = collectProtected(tauntRestriction, barrierAura);
-    const forcedHexes = collectForcedHexes(tauntRestriction);
+    const protectedHexes = collectProtected(
+      tauntRestrictionRef.current,
+      barrierAuraRef.current,
+    );
+    const forcedHexes = collectForcedHexes(tauntRestrictionRef.current);
     const exclude = [
       ...wallsPlacedThisRound.map((k) => {
         const [q, r] = k.split(',').map(Number);
@@ -1321,10 +1694,10 @@ export function App() {
     ];
     const picks = pickThreatPlacementHexes(
       liveBoard,
-      toThreatActors(actorsForThreat),
+      toThreatActors(liveActors),
       card.n,
       {
-        occupied: allHexes(actorsForThreat),
+        occupied: allHexes(liveActors),
         protectedHexes,
         forcedHexes,
         bounds: { radius: mapRadius },
@@ -1372,7 +1745,7 @@ export function App() {
       `【王】抽了 ${card.n} 格，擺放：${placeDesc}（剩牌 ${restDeck.length}）`,
     );
 
-    let nextActors: Actors = { ...(liveActors ?? actors) };
+    let nextActors: Actors = { ...liveActors };
     for (const id of CLASS_ORDER) {
       const a = nextActors[id];
       if (a.eliminated) continue;
@@ -1394,6 +1767,56 @@ export function App() {
     });
   }
 
+  function acceptTauntOffer() {
+    const pending = tauntOffer;
+    if (!pending) return;
+    const snap = pending.liveActors;
+    const k = snap.knight;
+    const card = k.hand.find((c) => c.cardId === 'taunt');
+    const result = resolveTaunt({
+      isOthersTurn: true,
+      knightHex: k.hex,
+      existingBarrier: barrierAuraRef.current
+        ? {
+            priority: barrierAuraRef.current.priority,
+            targetHex: barrierAuraRef.current.targetHex,
+          }
+        : null,
+    });
+    if (!result.ok || !card) {
+      pushLog(`【嘲諷】無法使用：${result.reason ?? '手牌沒有嘲諷'}`);
+      setTauntOffer(null);
+      placeBossFromPending(pending);
+      return;
+    }
+    const restriction = result.bossPlaceRestriction ?? null;
+    tauntRestrictionRef.current = restriction;
+    setTauntRestriction(restriction);
+    const nextActors: Actors = {
+      ...snap,
+      knight: {
+        ...k,
+        hand: k.hand.filter((c) => c.instanceId !== card.instanceId),
+      },
+    };
+    commitActors(nextActors);
+    setTauntOffer(null);
+    pushLog(
+      `【嘲諷】使用 · 王必須鋪騎士鄰 1 (${k.hex.q},${k.hex.r})`,
+    );
+    setToast('嘲諷：王必須鋪鄰 1');
+    placeBossFromPending({ ...pending, liveActors: nextActors });
+  }
+
+  function declineTauntOffer() {
+    const pending = tauntOffer;
+    if (!pending) return;
+    setTauntOffer(null);
+    pushLog('【嘲諷】這次不用');
+    setToast('嘲諷：這次不用');
+    placeBossFromPending(pending);
+  }
+
   function finishRound(liveBoard: Board, liveActors: Actors, liveAging: Map<string, number>, liveWalls: string[], damaged: boolean) {
     const logs: string[] = [];
     let boardNow = liveBoard;
@@ -1401,8 +1824,11 @@ export function App() {
     let punishPicks: Axial[] = [];
 
     if (!damaged) {
-      const protectedHexes = collectProtected(tauntRestriction, barrierAura);
-      const forcedHexes = collectForcedHexes(tauntRestriction);
+      const protectedHexes = collectProtected(
+        tauntRestrictionRef.current,
+        barrierAuraRef.current,
+      );
+      const forcedHexes = collectForcedHexes(tauntRestrictionRef.current);
       const picks = pickThreatPlacementHexes(
         boardNow,
         toThreatActors(liveActors),
@@ -1459,6 +1885,9 @@ export function App() {
           mayPlayShotIgnoreRange: false,
           silenceImmuneThisRound: false,
           sealImmuneThisRound: false,
+          actedThisTurn: false,
+          hasPlayedThisTurn: false,
+          bigShowAwaitingShot: false,
         };
         continue;
       }
@@ -1477,6 +1906,11 @@ export function App() {
         mayPlayShotIgnoreRange: false,
         silenceImmuneThisRound: false,
         sealImmuneThisRound: false,
+        actedThisTurn: false,
+        hasPlayedThisTurn: false,
+        barrierOnCooldown: prev.barrierCooldownPending,
+        barrierCooldownPending: false,
+        bigShowAwaitingShot: false,
         // ammo / deck / curseStacks 保留
       };
       const pulled = drawFromDeck(id, a, 1);
@@ -1513,8 +1947,12 @@ export function App() {
     setActors(nextActors);
     setBarrierAura(null);
     setTauntRestriction(null);
+    tauntRestrictionRef.current = null;
+    setTauntOffer(null);
     setEndConfirmFor(null);
     setPendingPlay(null);
+    const lead = firstActionableId(nextActors);
+    if (lead) setSelected(lead);
     for (const line of logs) pushLog(line);
     setToast(`第 ${nextRound} 輪開始（三人可行動）`);
   }
@@ -1523,6 +1961,10 @@ export function App() {
     reason = '結束回合',
     opts?: { force?: boolean; actorsNow?: Actors },
   ) {
+    if (tauntOffer) {
+      setToast('請先決定是否使用嘲諷');
+      return;
+    }
     if (won) {
       pushLog('【結束回合】已勝利，停止操作');
       setToast('已勝利');
@@ -1587,6 +2029,13 @@ export function App() {
         wallsPlacedThisRound,
         bossDamagedThisRound,
       );
+    } else {
+      const nid = nextActionableId(id, nextActors);
+      if (nid) {
+        setSelected(nid);
+        setHoveredCard(null);
+        pushLog(`【選取】自動切到 ${classLabel(nid)}`);
+      }
     }
   }
 
@@ -1640,6 +2089,8 @@ export function App() {
     setHoverHex(null);
     setBarrierAura(null);
     setTauntRestriction(null);
+    tauntRestrictionRef.current = null;
+    setTauntOffer(null);
     setLog([
       `重製對局：半徑 ${setup.mapRadius}・王HP ${setup.bossHp}・牌庫 ${setup.deckSize}。依序點 騎士 → 槍手 → 法師 出生格。`,
     ]);
@@ -1798,6 +2249,10 @@ export function App() {
   }
 
   function tryMoveTo(hex: Axial) {
+    if (tauntOffer) {
+      setToast('請先決定是否使用嘲諷');
+      return;
+    }
     if (won) {
       setToast('已勝利，停止操作');
       return;
@@ -1880,20 +2335,6 @@ export function App() {
     const left = movesLeft - steps;
     const cap = curseCarryCap(selected);
     const absorbed = absorbCursesAlongPath(board, path, me.curseStacks, cap);
-    const blockCurse = absorbed.curseStacks >= cap;
-    let nextLocked = true;
-    let stuckUnlock = false;
-    if (left <= 0) {
-      nextLocked = false;
-    } else {
-      const canCont = neighbors(dest).some((n) =>
-        canStandAt(absorbed.board, n, { occupied, blockCurse }),
-      );
-      if (!canCont) {
-        nextLocked = false;
-        stuckUnlock = true;
-      }
-    }
 
     const moved: Actors = {
       ...actors,
@@ -1901,8 +2342,9 @@ export function App() {
         ...actors[selected],
         hex: dest,
         hasMovedThisTurn: true,
+        actedThisTurn: true,
         movesLeft: left,
-        moveLocked: nextLocked,
+        moveLocked: false,
         curseStacks: absorbed.curseStacks,
       },
     };
@@ -1928,23 +2370,11 @@ export function App() {
       absorbed.absorbedHexes.length > 0
         ? ` · 吸咒×${absorbed.absorbedHexes.length}→層${absorbed.curseStacks}`
         : '';
-    const lockNote = nextLocked
-      ? ' · 移動鎖定中（須走完才可出牌）'
-      : stuckUnlock
-        ? ''
-        : ' · 移動完成，可出牌';
     pushLog(
       `【移動】${classLabel(selected)} (${from.q},${from.r}) → (${dest.q},${dest.r})` +
-        `（${via} · 剩餘移動 ${left}${curseNote}${lockNote}）`,
+        `（${via} · 剩餘移動 ${left}${curseNote}）`,
     );
-    if (stuckUnlock) pushLog('無法續走，解鎖出牌');
-    setToast(
-      stuckUnlock
-        ? `移動到 (${dest.q},${dest.r})；無法續走，解鎖出牌`
-        : `移動到 (${dest.q},${dest.r})（剩餘移動 ${left}` +
-            (nextLocked ? '；鎖定出牌' : '；可出牌') +
-            '）',
-    );
+    setToast(`移動到 (${dest.q},${dest.r})（剩餘移動 ${left}）`);
   }
 
   function completeTurbulence(
@@ -1992,8 +2422,7 @@ export function App() {
     ]);
     const moved: Actors = {
       ...actors,
-      [selected]: {
-        ...actors[selected],
+      [selected]: withPlayFlags(actors[selected], {
         hex: result.actorPosition,
         hasMovedThisTurn: true,
         curseStacks: absorbed.curseStacks,
@@ -2001,7 +2430,7 @@ export function App() {
         actionsLeft: lookupCountsTowardAction(selected, 'turbulence')
           ? Math.max(0, actors[selected].actionsLeft - 1)
           : actors[selected].actionsLeft,
-      },
+      }),
     };
     const curseLeave = applyCurseFullIfNeeded(
       absorbed.board,
@@ -2070,14 +2499,13 @@ export function App() {
     }
     const nextActors: Actors = {
       ...actors,
-      [selected]: {
-        ...actors[selected],
+      [selected]: withPlayFlags(actors[selected], {
         amplifiedPending: false,
         hand: actors[selected].hand.filter((c) => c.instanceId !== card.instanceId),
         actionsLeft: lookupCountsTowardAction(selected, 'wind')
           ? Math.max(0, actors[selected].actionsLeft - 1)
           : actors[selected].actionsLeft,
-      },
+      }),
     };
     applyBoardAndEnclosure(result.board, nextActors);
     setPendingPlay(null);
@@ -2130,8 +2558,7 @@ export function App() {
     );
     const charged: Actors = {
       ...actors,
-      [selected]: {
-        ...actors[selected],
+      [selected]: withPlayFlags(actors[selected], {
         hex: final.actorPosition,
         hasMovedThisTurn: true,
         endedThisRound: true,
@@ -2141,7 +2568,7 @@ export function App() {
         actionsLeft: lookupCountsTowardAction(selected, 'heroic_charge')
           ? Math.max(0, actors[selected].actionsLeft - 1)
           : actors[selected].actionsLeft,
-      },
+      }),
     };
     const curseLeave = applyCurseFullIfNeeded(
       final.board,
@@ -2194,10 +2621,11 @@ export function App() {
     const nextActors: Actors = {
       ...actors,
       [selected]: {
-        ...meNow,
-        hex: result.actorPosition!,
-        sealed: false,
-        hand: meNow.hand.filter((c) => c.instanceId !== card.instanceId),
+        ...withPlayFlags(meNow, {
+          hex: result.actorPosition!,
+          sealed: false,
+          hand: meNow.hand.filter((c) => c.instanceId !== card.instanceId),
+        }),
       },
     };
     applyBoardAndEnclosure(result.board, nextActors);
@@ -2225,13 +2653,12 @@ export function App() {
     });
     const nextActors: Actors = {
       ...actors,
-      [selected]: {
-        ...actors[selected],
+      [selected]: withPlayFlags(actors[selected], {
         hand: actors[selected].hand.filter((c) => c.instanceId !== card.instanceId),
         actionsLeft: counts
           ? Math.max(0, actors[selected].actionsLeft - 1)
           : actors[selected].actionsLeft,
-      },
+      }),
     };
     if (result.ok) {
       applyBoardAndEnclosure(result.board, nextActors);
@@ -2278,13 +2705,12 @@ export function App() {
       const absorbedCount = Math.max(0, result.selfCurseStacks - curseStacks);
       const updated: Actors = {
         ...actors,
-        [selected]: {
-          ...actors[selected],
+        [selected]: withPlayFlags(actors[selected], {
           curseStacks: result.selfCurseStacks,
           hand: actors[selected].hand.filter(
             (c) => c.instanceId !== card.instanceId,
           ),
-        },
+        }),
         [targetId]: {
           ...actors[targetId],
           curseStacks: result.allyCurseStacks,
@@ -2345,13 +2771,12 @@ export function App() {
     }
     const updated: Actors = {
       ...actors,
-      [selected]: {
-        ...actors[selected],
+      [selected]: withPlayFlags(actors[selected], {
         curseStacks: tileResult.selfCurseStacks,
         hand: actors[selected].hand.filter(
           (c) => c.instanceId !== card.instanceId,
         ),
-      },
+      }),
     };
     const curseLeave = applyCurseFullIfNeeded(
       tileResult.board,
@@ -2432,8 +2857,68 @@ export function App() {
         completeArrogantPush(hex, pendingPlay);
         return;
       }
+      if (pendingPlay.kind === 'planar_swap') {
+        completePlanarSwap(hex, pendingPlay.card);
+        return;
+      }
     }
     tryMoveTo(hex);
+  }
+
+  function completePlanarSwap(hex: Axial, card: HandCard) {
+    const meNow = actorsRef.current[selected];
+    const usedAmp = meNow.amplifiedPending;
+    const maxDist = planarRange(usedAmp);
+    const targetId = occupantAt(actorsRef.current, hex, selected);
+    if (!targetId) {
+      pushLog('【位面調換】請點範圍內友軍');
+      setToast('請點範圍內友軍（不可點自己）');
+      return;
+    }
+    const result = resolvePlanarSwap({
+      board,
+      mageHex: meNow.hex,
+      actorA: { id: selected, hex: meNow.hex },
+      actorB: { id: targetId, hex: actorsRef.current[targetId].hex },
+      amplified: usedAmp,
+    });
+    if (!result.ok) {
+      pushLog(`【位面調換】失敗：${result.reason}`);
+      setToast(`位面失敗：${result.reason}`);
+      return;
+    }
+    const pos = result.positions;
+    let nextActors: Actors = { ...actorsRef.current };
+    for (const id of result.swappedActorIds) {
+      const cid = id as ClassId;
+      if (!(cid in nextActors)) continue;
+      nextActors[cid] = {
+        ...nextActors[cid],
+        hex: pos?.[cid] ?? nextActors[cid].hex,
+        sealed: false,
+        silenceImmuneThisRound: true,
+        sealImmuneThisRound: true,
+      };
+    }
+    const counts = lookupCountsTowardAction(selected, 'planar_swap');
+    nextActors[selected] = withPlayFlags(nextActors[selected], {
+      amplifiedPending: false,
+      hand: nextActors[selected].hand.filter((c) => c.instanceId !== card.instanceId),
+      actionsLeft: counts
+        ? Math.max(0, nextActors[selected].actionsLeft - 1)
+        : nextActors[selected].actionsLeft,
+    });
+    setPendingPlay(null);
+    const synced = applyBoardAndEnclosure(board, nextActors);
+    pushLog(
+      `【位面調換】${classLabel(selected)}↔${classLabel(targetId)}` +
+        (usedAmp ? `（增幅距離 ${maxDist}）` : ''),
+    );
+    pushLog('【位面調換】換位後雙方本回合不受沉默／封印');
+    setToast('換位後雙方本回合不受沉默／封印');
+    if (result.endTurn) {
+      endTurn('位面調換強制結束', { force: true, actorsNow: synced.actors });
+    }
   }
 
   function completeArrogantPush(
@@ -2465,7 +2950,11 @@ export function App() {
     if (left <= 0) {
       setPendingPlay(null);
       applyBoardAndEnclosure(pushed.board, actorsRef.current);
-      setToast('狂妄推牆結束');
+      noteBossDamage(pending.bossDamage, pushed.board, [], actorsRef.current);
+      setToast('狂妄推牆結束，王鋪格');
+      if (pending.endTurnAfter) {
+        endTurn('大招射擊後結束', { force: true, actorsNow: actorsRef.current });
+      }
     } else {
       setBoard(pushed.board);
       setPendingPlay({ ...pending, remaining: left });
@@ -2483,6 +2972,10 @@ export function App() {
     const ammoNow = meNow.ammo;
     const handNow = meNow.hand;
 
+    if (tauntOffer) {
+      setToast('請先決定是否使用嘲諷');
+      return;
+    }
     if (won) {
       pushLog(`【${card.name}】已勝利，停止出牌`);
       setToast('已勝利');
@@ -2522,10 +3015,9 @@ export function App() {
       setToast('請先完成／取消指定');
       return;
     }
-    if (mustFinishMove) {
-      const msg = '移動中，請先走完再出牌';
-      pushLog(`【${card.name}】→ ${msg}（剩餘移動 ${movesLeft}）`);
-      setToast(msg);
+    if (meNow.bigShowAwaitingShot && card.cardId !== 'shot') {
+      pushLog(`【${card.name}】大招後只能打射擊或結束回合`);
+      setToast('大招後請打射擊，或結束回合放棄');
       return;
     }
     if (counts && actionsNow <= 0 && !bonusShot) {
@@ -2541,16 +3033,17 @@ export function App() {
         ammo: ammoNow,
         ignoreRangePenalty: bonusShot,
       });
-      const spent: ClassActor = {
-        ...meNow,
+      const awaiting = meNow.bigShowAwaitingShot;
+      const spent: ClassActor = withPlayFlags(meNow, {
         ammo: result.ammo,
         mayPlayShotIgnoreRange: bonusShot ? false : meNow.mayPlayShotIgnoreRange,
+        bigShowAwaitingShot: false,
         hand: meNow.hand.filter((c) => c.instanceId !== card.instanceId),
         actionsLeft:
           bonusShot || !counts
             ? meNow.actionsLeft
             : Math.max(0, meNow.actionsLeft - 1),
-      };
+      });
       const pulled = drawFromDeck(selected, spent, result.drawFromAmmo);
       commitActors({ ...actorsRef.current, [selected]: pulled.actor });
       const drawnNames = pulled.drawn
@@ -2567,7 +3060,6 @@ export function App() {
         ...actorsRef.current,
         [selected]: pulled.actor,
       };
-      noteBossDamage(result.bossDamage, board, [], shotActors);
       pushLog(
         `【射擊】attacker=(${attacker.q},${attacker.r}) → bossDamage=${result.bossDamage}` +
           (result.drawFromAmmo > 0
@@ -2584,16 +3076,22 @@ export function App() {
           kind: 'arrogant_push',
           remaining: result.pushFromAmmo,
           gunnerHex: attacker,
+          bossDamage: result.bossDamage,
+          endTurnAfter: awaiting,
         });
         setToast(
-          `射擊：王傷 ${result.bossDamage}；點 ${result.pushFromAmmo} 鄰格推牆`,
+          `射擊：王傷 ${result.bossDamage}；先推 ${result.pushFromAmmo} 鄰格，王再鋪`,
         );
       } else {
+        noteBossDamage(result.bossDamage, board, [], shotActors);
         setToast(
           result.drawFromAmmo > 0
             ? `射擊：王傷 ${result.bossDamage}，抽 ${drawnNames.length}`
             : `射擊：王傷 ${result.bossDamage}`,
         );
+        if (awaiting) {
+          endTurn('大招射擊後結束', { force: true, actorsNow: shotActors });
+        }
       }
       return;
     }
@@ -2615,12 +3113,11 @@ export function App() {
           [card.instanceId, result.discardedShotId ?? ''].filter(Boolean),
         );
         const spend = lookupCountsTowardAction(selected, card.cardId);
-        return {
-          ...a,
+        return withPlayFlags(a, {
           ammo: result.ammo,
           hand: a.hand.filter((c) => !drop.has(c.instanceId)),
           actionsLeft: spend ? Math.max(0, a.actionsLeft - 1) : a.actionsLeft,
-        };
+        });
       });
       pushLog(
         `【${card.name}】OK → 裝填 dmg+${result.ammo.damageBonus} draw+${result.ammo.drawBonus} push+${result.ammo.pushBonus}（計次）`,
@@ -2655,12 +3152,13 @@ export function App() {
         setToast(`狂妄氣瓶失敗：${why}`);
         return;
       }
-      updateActor(selected, (a) => ({
-        ...a,
-        ammo: result.ammo,
-        hand: a.hand.filter((c) => c.instanceId !== card.instanceId),
-        actionsLeft: counts ? Math.max(0, a.actionsLeft - 1) : a.actionsLeft,
-      }));
+      updateActor(selected, (a) =>
+        withPlayFlags(a, {
+          ammo: result.ammo,
+          hand: a.hand.filter((c) => c.instanceId !== card.instanceId),
+          actionsLeft: counts ? Math.max(0, a.actionsLeft - 1) : a.actionsLeft,
+        }),
+      );
       pushLog(
         `【狂妄氣瓶】OK → 裝填 push+${result.ammo.pushBonus}` +
           `（dmg ${result.ammo.damageBonus} draw ${result.ammo.drawBonus}）`,
@@ -2679,30 +3177,39 @@ export function App() {
         setToast(`大招失敗：${result.reason}`);
         return;
       }
-      updateActor(selected, (a) => ({
-        ...a,
+      const afterShow = withPlayFlags(meNow, {
         ammo: result.ammo,
         mayPlayShotIgnoreRange:
           result.mayPlayShot && result.ignoreRangePenaltyForShot,
-        hand: a.hand.filter((c) => c.instanceId !== card.instanceId),
-        actionsLeft: counts ? Math.max(0, a.actionsLeft - 1) : a.actionsLeft,
-      }));
+        hand: meNow.hand.filter((c) => c.instanceId !== card.instanceId),
+        actionsLeft: counts ? Math.max(0, meNow.actionsLeft - 1) : meNow.actionsLeft,
+      });
+      const hasShot = afterShow.hand.some((c) => c.cardId === 'shot');
+      const awaiting = result.mayPlayShot === true && hasShot;
+      const nextShow: ClassActor = {
+        ...afterShow,
+        bigShowAwaitingShot: awaiting,
+      };
+      const showActors: Actors = { ...actorsRef.current, [selected]: nextShow };
+      commitActors(showActors);
       pushLog(`【來吧! 大鬧一場!】OK mayPlayShot=${result.mayPlayShot}`);
-      setToast(
-        result.mayPlayShot
-          ? '大招成功：請再打 1 張手上射擊'
-          : '大招成功',
-      );
+      if (awaiting) {
+        setToast('大招成功：請再打 1 張手上射擊，或結束回合放棄');
+      } else {
+        setToast('大招成功（無射擊可打，結束回合）');
+        endTurn('大招無射擊可兌現', { force: true, actorsNow: showActors });
+      }
       return;
     }
 
     if (card.cardId === 'amplify') {
       const result = resolveAmplify({ hand: toMageInstances(hand) });
-      updateActor(selected, (a) => ({
-        ...a,
-        amplifiedPending: result.amplifiedPending,
-        hand: a.hand.filter((c) => c.instanceId !== card.instanceId),
-      }));
+      updateActor(selected, (a) =>
+        withPlayFlags(a, {
+          amplifiedPending: result.amplifiedPending,
+          hand: a.hand.filter((c) => c.instanceId !== card.instanceId),
+        }),
+      );
       pushLog('【強能增幅】armed（不計次）');
       setToast('強能增幅：下一招吃加成');
       return;
@@ -2714,14 +3221,13 @@ export function App() {
         attacker,
         amplified: usedAmp,
       });
-      const spent: ClassActor = {
-        ...meNow,
+      const spent: ClassActor = withPlayFlags(meNow, {
         amplifiedPending: false,
         hand: meNow.hand.filter((c) => c.instanceId !== card.instanceId),
         actionsLeft: counts
           ? Math.max(0, meNow.actionsLeft - 1)
           : meNow.actionsLeft,
-      };
+      });
       const nextActors: Actors = { ...actorsRef.current, [selected]: spent };
       commitActors(nextActors);
       noteBossDamage(result.bossDamage, board, [], nextActors);
@@ -2743,13 +3249,12 @@ export function App() {
     if (card.cardId === 'focus') {
       const usedAmp = amplifiedPending;
       const result = resolveFocus({ amplified: usedAmp });
-      const spent: ClassActor = {
-        ...actors[selected],
+      const spent: ClassActor = withPlayFlags(actors[selected], {
         amplifiedPending: false,
         hand: actors[selected].hand.filter(
           (c) => c.instanceId !== card.instanceId,
         ),
-      };
+      });
       const pulled = drawFromDeck(selected, spent, result.drawCount);
       const nextActors: Actors = { ...actors, [selected]: pulled.actor };
       const drawnNames = pulled.drawn
@@ -2780,6 +3285,11 @@ export function App() {
     }
 
     if (card.cardId === 'barrier') {
+      if (meNow.barrierOnCooldown) {
+        pushLog('【磁力屏障】失敗：冷卻中（下一回合不可再出）');
+        setToast('屏障冷卻中');
+        return;
+      }
       const usedAmp = amplifiedPending;
       let allyTarget:
         | { id: string; hex: Axial; eliminated?: boolean }
@@ -2810,12 +3320,14 @@ export function App() {
         return;
       }
       setBarrierAura(result.aura ?? null);
-      updateActor(selected, (a) => ({
-        ...a,
+      const afterBar = withPlayFlags(meNow, {
         amplifiedPending: false,
-        hand: a.hand.filter((c) => c.instanceId !== card.instanceId),
-        actionsLeft: counts ? Math.max(0, a.actionsLeft - 1) : a.actionsLeft,
-      }));
+        barrierCooldownPending: true,
+        hand: meNow.hand.filter((c) => c.instanceId !== card.instanceId),
+        actionsLeft: counts ? Math.max(0, meNow.actionsLeft - 1) : meNow.actionsLeft,
+      });
+      const barActors: Actors = { ...actorsRef.current, [selected]: afterBar };
+      commitActors(barActors);
       const who = result.aura?.targetActorId ?? selected;
       pushLog(
         `【磁力屏障】保護 ${classLabel(who as ClassId)} 鄰格 ${result.aura?.protectedHexes.length ?? 0}` +
@@ -2824,62 +3336,17 @@ export function App() {
       );
       setToast(
         usedAmp && allyTarget
-          ? `屏障：本輪保護 ${classLabel(allyTarget.id as ClassId)} 鄰 1`
-          : '屏障：本輪保護自己鄰 1',
+          ? `屏障：本輪保護 ${classLabel(allyTarget.id as ClassId)} 鄰 1（結束回合）`
+          : '屏障：本輪保護自己鄰 1（結束回合）',
       );
+      endTurn('磁力屏障強制結束', { force: true, actorsNow: barActors });
       return;
     }
 
     if (card.cardId === 'planar_swap') {
-      if (actors[allyId].eliminated) {
-        pushLog('【位面調換】失敗：無存活友軍');
-        setToast('位面失敗：無存活友軍');
-        return;
-      }
-      const usedAmp = amplifiedPending;
-      const result = resolvePlanarSwap({
-        board,
-        mageHex: unitHex,
-        actorA: { id: selected, hex: unitHex },
-        actorB: { id: allyId, hex: allyHex },
-        amplified: usedAmp,
-      });
-      if (!result.ok) {
-        pushLog(`【位面調換】失敗：${result.reason}`);
-        setToast(`位面失敗：${result.reason}`);
-        patchActor(selected, { amplifiedPending: false });
-        return;
-      }
-      const pos = result.positions;
-      let nextActors: Actors = { ...actors };
-      for (const id of result.swappedActorIds) {
-        const cid = id as ClassId;
-        if (!(cid in nextActors)) continue;
-        nextActors[cid] = {
-          ...nextActors[cid],
-          hex: pos?.[cid] ?? nextActors[cid].hex,
-          sealed: false,
-          silenceImmuneThisRound: true,
-          sealImmuneThisRound: true,
-        };
-      }
-      nextActors[selected] = {
-        ...nextActors[selected],
-        amplifiedPending: false,
-        hand: nextActors[selected].hand.filter(
-          (c) => c.instanceId !== card.instanceId,
-        ),
-      };
-      const synced = applyBoardAndEnclosure(board, nextActors);
-      pushLog(`【位面調換】${classLabel(selected)}↔${classLabel(allyId)}`);
-      pushLog('【位面調換】換位後雙方本回合不受沉默／封印');
-      setToast('換位後雙方本回合不受沉默／封印');
-      if (result.endTurn) {
-        endTurn('位面調換強制結束', {
-          force: true,
-          actorsNow: synced.actors,
-        });
-      }
+      setPendingPlay({ kind: 'planar_swap', card });
+      pushLog('【位面調換】請點範圍內友軍換位（不可點自己）');
+      setToast('位面：點範圍內友軍');
       return;
     }
 
@@ -2907,14 +3374,19 @@ export function App() {
         setToast(`信仰失敗：${result.reason}`);
         return;
       }
-      updateActor(selected, (a) => ({
-        ...a,
-        curseStacks: result.curseStacks,
-        hand: a.hand.filter((c) => c.instanceId !== card.instanceId),
-        actionsLeft: counts ? Math.max(0, a.actionsLeft - 1) : a.actionsLeft,
-      }));
-      pushLog(`【堅定信仰】清 ${result.cleared} → 咒層 ${result.curseStacks}`);
-      setToast(`信仰：詛咒 → ${result.curseStacks}`);
+      updateActor(selected, (a) =>
+        withPlayFlags(
+          a,
+          {
+            curseStacks: result.curseStacks,
+            hand: a.hand.filter((c) => c.instanceId !== card.instanceId),
+            actionsLeft: counts ? Math.max(0, a.actionsLeft - 1) : a.actionsLeft,
+          },
+          { lockMoves: true },
+        ),
+      );
+      pushLog(`【堅定信仰】清 ${result.cleared} → 咒層 ${result.curseStacks}（不可再移動）`);
+      setToast(`信仰：詛咒 → ${result.curseStacks}；不可再移動`);
       return;
     }
 
@@ -2933,22 +3405,8 @@ export function App() {
     }
 
     if (card.cardId === 'taunt') {
-      const result = resolveTaunt({
-        isOthersTurn,
-        knightHex: unitHex,
-        existingBarrier: barrierAura
-          ? { priority: barrierAura.priority, targetHex: barrierAura.targetHex }
-          : null,
-      });
-      if (!result.ok) {
-        pushLog(`【嘲諷】失敗：${result.reason}（可開「他人回合」）`);
-        setToast(`嘲諷失敗：${result.reason}`);
-        return;
-      }
-      setTauntRestriction(result.bossPlaceRestriction ?? null);
-      removeFromHand(card.instanceId);
-      pushLog(`【嘲諷】中心 (${unitHex.q},${unitHex.r}) · 王必須在鄰 1 鋪牆`);
-      setToast('嘲諷：王必須在鄰 1 鋪牆');
+      pushLog('【嘲諷】不用主動打：隊友傷王時會在騎士頭上詢問');
+      setToast('嘲諷會在隊友傷王時詢問');
       return;
     }
 
@@ -2971,10 +3429,8 @@ export function App() {
   return (
     <div className="app">
       <header>
-        <h1>薄 UI（三職業平衡試玩）</h1>
-        <p className="muted">
-          必須重製開局。封印留下；咒滿鋪鄰封印；新封印抽最小王牌。越打越擠是主軸。
-        </p>
+        <h1>越打越擠</h1>
+        <p className="muted">三職業試玩 · 傷王即鋪 · 封印留下</p>
       </header>
 
       <div className="play-row">
@@ -2996,6 +3452,22 @@ export function App() {
           }
           hoverPath={hoverPath}
           targetHexes={targetHexes}
+          legalHexes={legalHexes}
+          barrierHexes={barrierHexes}
+          rangeWash={
+            planarHoverRange != null
+              ? { center: unitHex, radius: planarHoverRange }
+              : null
+          }
+          tauntPrompt={
+            tauntOffer && !actors.knight.eliminated
+              ? {
+                  knightHex: actors.knight.hex,
+                  onAccept: acceptTauntOffer,
+                  onDecline: declineTauntOffer,
+                }
+              : null
+          }
           hexHoverHint={devotionHoverHint}
           onHexClick={onHexClick}
           onHexHover={setHoverHex}
@@ -3040,37 +3512,74 @@ export function App() {
         </section>
       </div>
 
-      <div className="turn-row">
-        <span className="tab">
+      <div className="hud" role="status">
+        <div className="hud-boss">
+          <span className="hud-boss-label">王</span>
+          <div
+            className="hud-hp"
+            title={`王 HP ${bossHp}/${bossHpMax}`}
+          >
+            <div
+              className="hud-hp-fill"
+              style={{
+                width: `${Math.max(0, Math.min(100, (bossHp / Math.max(1, bossHpMax)) * 100))}%`,
+              }}
+            />
+          </div>
+          <span className="hud-boss-num">
+            {bossHp}/{bossHpMax}
+          </span>
+        </div>
+        <span className="hud-chip">輪 {roundIndex}</span>
+        <span className={`hud-chip hud-chip-${selected}`}>
           {classLabel(selected)}
-          {' · '}王HP {bossHp}/{bossHpMax}
-          {' · '}輪 {roundIndex}
-          {won ? ' · 勝利' : ''}
-          {lost ? ' · 敗北' : ''}
-          {' · '}移動 {movesLeft}/
-          {basicMoveCap(board, unitHex, TURN_MOVES_PER_ROUND)}
-          {' · '}行動 {actionsLeft}/{TURN_ACTIONS_PER_ROUND}
-          {moveLocked ? ' · 移動鎖定' : ''}
-          {hasMovedThisTurn ? ' · 已移動' : ''}
-          {me.endedThisRound ? ' · 本輪已結束' : ''}
-          {mayPlayShotIgnoreRange ? ' · 大招可射' : ''}
-          {' · '}({unitHex.q},{unitHex.r})
-          {selected === 'gunner' ? ` · ${ammoHint}` : ''}
-          {selected === 'mage' && amplifiedPending ? ' · 增幅待用' : ''}
-          {selected === 'mage' && barrierAura ? ' · 屏障中' : ''}
-          {` · 手牌 ${hand.length}/${HAND_CAP[selected]}`}
-          {` · 牌庫 ${me.deck.length}`}
-          {curseStacks > 0 ? ` · 咒${curseStacks}` : ''}
-          {isAdjacentToSilence(board, unitHex) ? ' · 鄰沉默' : ''}
-          {me.sealed ? ' · 封' : ''}
-          {me.eliminated ? ' · 出局' : ''}
-          {tauntRestriction ? ' · 嘲諷中' : ''}
-          {pendingPlay ? ` · 指定:${pendingPlay.kind}` : ''}
-          {lastDraw ? ` · 上次抽 ${lastDraw}` : ''}
         </span>
+        <span className="hud-chip">
+          移動 {movesLeft}/{basicMoveCap(board, unitHex, TURN_MOVES_PER_ROUND)}
+        </span>
+        <span className="hud-chip">
+          行動 {actionsLeft}/{TURN_ACTIONS_PER_ROUND}
+        </span>
+        <span className="hud-chip muted-chip">
+          手 {hand.length}/{HAND_CAP[selected]} · 庫 {me.deck.length}
+        </span>
+        {won ? <span className="hud-chip hud-chip-win">勝利</span> : null}
+        {lost ? <span className="hud-chip hud-chip-lose">敗北</span> : null}
+        {hasMovedThisTurn ? <span className="hud-chip">已移動</span> : null}
+        {me.hasPlayedThisTurn ? <span className="hud-chip">已出牌</span> : null}
+        {me.actedThisTurn && !me.endedThisRound ? (
+          <span className="hud-chip hud-chip-warn">須結束才能換人</span>
+        ) : null}
+        {me.endedThisRound ? <span className="hud-chip">本輪已結束</span> : null}
+        {me.bigShowAwaitingShot ? (
+          <span className="hud-chip hud-chip-warn">大招待射擊</span>
+        ) : null}
+        {mayPlayShotIgnoreRange ? <span className="hud-chip">可無視距離</span> : null}
+        {amplifiedPending ? <span className="hud-chip hud-chip-mage">增幅</span> : null}
+        {me.barrierOnCooldown ? <span className="hud-chip">屏障冷卻</span> : null}
+        {barrierAura ? <span className="hud-chip hud-chip-mage">屏障中</span> : null}
+        {selected === 'gunner' ? (
+          <span className="hud-chip hud-chip-gunner">{ammoHint}</span>
+        ) : null}
+        {curseStacks > 0 ? <span className="hud-chip">咒 {curseStacks}</span> : null}
+        {isAdjacentToSilence(board, unitHex) && !me.silenceImmuneThisRound ? (
+          <span className="hud-chip hud-chip-warn">鄰沉默</span>
+        ) : null}
+        {me.sealed ? <span className="hud-chip hud-chip-warn">封</span> : null}
+        {me.eliminated ? <span className="hud-chip">出局</span> : null}
+        {tauntRestriction ? <span className="hud-chip hud-chip-knight">嘲諷中</span> : null}
+        {pendingPlay ? (
+          <span className="hud-chip hud-chip-warn">指定中</span>
+        ) : null}
+        {lastDraw ? (
+          <span className="hud-chip muted-chip" title={lastDraw}>
+            上次抽
+          </span>
+        ) : null}
         {pendingPlay ? (
           <button
             type="button"
+            className="hud-cancel"
             onClick={() => clearPending('【取消指定】已清除 pendingPlay')}
           >
             取消指定
@@ -3084,58 +3593,48 @@ export function App() {
         </p>
       ) : null}
 
-      {selected === 'knight' ? (
-        <div className="demo-toggles">
-          <label>
-            <input
-              type="checkbox"
-              checked={isOthersTurn}
-              onChange={(e) => setIsOthersTurn(e.target.checked)}
-            />{' '}
-            他人回合（嘲諷）
-          </label>
-        </div>
-      ) : null}
-
       <div className="class-picks" role="group" aria-label="職業">
-          {CLASS_ORDER.map((id) => (
+        {CLASS_ORDER.map((id) => {
+          const a = actors[id];
+          const status = a.eliminated
+            ? '出局'
+            : a.endedThisRound
+              ? '已結束'
+              : a.actedThisTurn
+                ? '行動中'
+                : '可行動';
+          return (
             <div key={id} className="class-pick">
-            <button
-              type="button"
-              className={
-                'card-btn' +
-                (id === selected ? ' selected' : '') +
-                (actors[id].endedThisRound || actors[id].eliminated
-                  ? ' ended'
-                  : '')
-              }
-              onClick={() => selectClass(id)}
-              disabled={phase !== 'playing'}
-            >
-              <span className="name">{classLabel(id)}</span>
-              <span className="meta">
-                ({actors[id].hex.q},{actors[id].hex.r})
-                {actors[id].eliminated
-                  ? ' · 出局'
-                  : actors[id].endedThisRound
-                    ? ' · 已結束'
-                    : ' · 可行動'}
-                {actors[id].curseStacks >= 1 ? ' · 咒' : ''}
-                {isAdjacentToSilence(board, actors[id].hex)
-                  ? actors[id].silenceImmuneThisRound
-                    ? ' · 鄰沉默（免疫）'
-                    : ' · 鄰沉默'
-                  : ''}
-                {actors[id].sealed && !actors[id].eliminated ? ' · 封' : ''}
-                {actors[id].sealImmuneThisRound ? ' · 封免' : ''}
-              </span>
-            </button>
-            <ClassPassiveChip classId={id} />
+              <button
+                type="button"
+                className={
+                  'class-card' +
+                  ` class-card-${id}` +
+                  (id === selected ? ' is-selected' : '') +
+                  (a.endedThisRound || a.eliminated ? ' is-done' : '')
+                }
+                onClick={() => selectClass(id)}
+                disabled={phase !== 'playing'}
+              >
+                <span className="class-card-name">{classLabel(id)}</span>
+                <span className="class-card-status">{status}</span>
+                <span className="class-card-flags">
+                  {a.curseStacks >= 1 ? <span>咒{a.curseStacks}</span> : null}
+                  {a.sealed && !a.eliminated ? <span>封</span> : null}
+                  {isAdjacentToSilence(board, a.hex) && !a.silenceImmuneThisRound ? (
+                    <span>默</span>
+                  ) : null}
+                  {a.sealImmuneThisRound ? <span>封免</span> : null}
+                </span>
+              </button>
+              <ClassPassiveChip classId={id} />
             </div>
-          ))}
+          );
+        })}
       </div>
       <Hand
         cards={hand}
+        classId={selected}
         onPlay={onPlay}
         onCardHover={setHoveredCard}
         adjacentSilence={

@@ -147,6 +147,7 @@ describe('aged wall destroy → damages boss', () => {
     expect(hit.damagesBoss).toBe(true);
     expect(hit.bossDamaged).toBe(true);
     expect(hit.events).toEqual([
+      { type: 'TerrainDestroyed', hex: cell },
       {
         type: 'BossDamaged',
         amount: 1,
@@ -163,6 +164,8 @@ describe('aged wall destroy → damages boss', () => {
     expect(hit.destroyed).toBe(true);
     expect(hit.damagesBoss).toBe(false);
     expect(hit.bossDamaged).toBe(false);
-    expect(hit.events).toEqual([]);
+    expect(hit.events).toEqual([
+      { type: 'TerrainDestroyed', hex: { q: 3, r: 0 } },
+    ]);
   });
 });

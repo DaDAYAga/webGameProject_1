@@ -82,8 +82,8 @@ export type PlanarSwapResult = {
   ok: boolean;
   reason?: string;
   events: MageCardEvent[];
-  /** 不計次。 */
-  counted: false;
+  /** 計次（2026-09-19）。 */
+  counted: boolean;
   /**
    * 受沉默旗標（牌面）。
    * 未增幅：true（上層擋出牌）；增幅後：false（該張不受沉默）。

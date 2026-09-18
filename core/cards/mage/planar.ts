@@ -1,7 +1,7 @@
 /**
  * 法師「位面調換」×1：交換兩名單位位置。
- * 不計次；受沉默（增幅後該張不受）；成功後強制結束回合。
- * 不可王、不可出局；可封印。兩人皆須在法師距離 ≤3。禁止壓頭／不可站格。
+ * 計次；受沉默（增幅後該張不受）；成功後強制結束回合。
+ * 不可王、不可出局、不可自己換自己；可封印。兩人皆須在法師距離 ≤3（增幅 ≤4）。
  * 成功後雙方本回合不受沉默／封印（SilenceImmunityThisRound + SealImmunityThisRound）。
  */
 
@@ -15,6 +15,8 @@ import type {
 
 /** 位面調換：目標與法師的最大距離。 */
 export const PLANAR_SWAP_MAX_DISTANCE = 3;
+/** 增幅後距離加成（3→4）。 */
+export const PLANAR_SWAP_AMPLIFY_RANGE_BONUS = 1;
 
 export type ResolvePlanarSwapInput = {
   board: Board;
@@ -39,7 +41,7 @@ function fail(
     ok: false,
     reason,
     events: [],
-    counted: false,
+    counted: true,
     silenced,
     endTurn: false,
     swappedActorIds: [],
@@ -55,6 +57,9 @@ export function resolvePlanarSwap(
   const amplified = input.amplified === true;
   /** 增幅後不受沉默；否則受沉默（上層擋出牌）。 */
   const silenced = !amplified;
+  const maxDist =
+    PLANAR_SWAP_MAX_DISTANCE +
+    (amplified ? PLANAR_SWAP_AMPLIFY_RANGE_BONUS : 0);
   const { board, mageHex, actorA, actorB } = input;
 
   if (actorA.id === actorB.id || equals(actorA.hex, actorB.hex)) {
@@ -69,10 +74,10 @@ export function resolvePlanarSwap(
     return fail('cannot_swap_eliminated', silenced);
   }
 
-  if (distance(mageHex, actorA.hex) > PLANAR_SWAP_MAX_DISTANCE) {
+  if (distance(mageHex, actorA.hex) > maxDist) {
     return fail('out_of_range_a', silenced);
   }
-  if (distance(mageHex, actorB.hex) > PLANAR_SWAP_MAX_DISTANCE) {
+  if (distance(mageHex, actorB.hex) > maxDist) {
     return fail('out_of_range_b', silenced);
   }
 
@@ -115,7 +120,7 @@ export function resolvePlanarSwap(
   return {
     ok: true,
     events,
-    counted: false,
+    counted: true,
     silenced,
     endTurn: true,
     swappedActorIds: [actorA.id, actorB.id],

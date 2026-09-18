@@ -13,7 +13,7 @@ import {
   type Board,
   type Tile,
 } from '@core/board/index.js';
-import { distance, equals, type Axial } from '@core/hex/index.js';
+import { distance, equals, neighbors, type Axial } from '@core/hex/index.js';
 import {
   DEFAULT_MAP_RADIUS,
   listMapHexes,
@@ -23,10 +23,20 @@ import {
   isInRangedSweetZone,
 } from '@core/combat/index.js';
 
-/** 走路預覽螢光綠。 */
-const PATH_FILL = '#39FF14';
-const PATH_STROKE = '#b8ff66';
-const PATH_START_FILL = 'rgba(57, 255, 20, 0.28)';
+/** 走路預覽：降亮度半透明綠。 */
+const PATH_FILL = 'rgba(57, 255, 20, 0.28)';
+const PATH_STROKE = 'rgba(184, 255, 102, 0.7)';
+const PATH_START_FILL = 'rgba(57, 255, 20, 0.16)';
+/** 可走範圍常駐（比路徑更淡）。 */
+const LEGAL_FILL = 'rgba(57, 255, 20, 0.12)';
+/** 屏障禁鋪淡藍。 */
+const BARRIER_FILL = 'rgba(90, 170, 230, 0.34)';
+const BARRIER_STROKE = 'rgba(140, 200, 240, 0.85)';
+/** 位面距離圈。 */
+const RANGE_FILL = 'rgba(160, 120, 220, 0.26)';
+/** 嘲諷詢問時的鄰 1 環。 */
+const TAUNT_FILL = 'rgba(232, 184, 74, 0.38)';
+const TAUNT_STROKE = '#e8b84a';
 
 /** 攻擊／指定目標：珊瑚紅（與路徑綠區隔）。 */
 const TARGET_FILL = 'rgba(255, 72, 110, 0.42)';
@@ -87,6 +97,12 @@ type BoardCanvasProps = {
   hoverPath?: Axial[] | null;
   /** 騎士攻擊等指定目標高亮（有別於走路路徑）。 */
   targetHexes?: Axial[] | null;
+  /** 可走範圍（無 pending 時）。 */
+  legalHexes?: Axial[] | null;
+  /** 屏障保護／禁鋪格。 */
+  barrierHexes?: Axial[] | null;
+  /** 位面等距離圈。 */
+  rangeWash?: { center: Axial; radius: number } | null;
   onHexClick?: (hex: Axial) => void;
   onHexHover?: (hex: Axial | null) => void;
   showSweetZone?: boolean;
@@ -100,6 +116,12 @@ type BoardCanvasProps = {
   mapRadius?: number;
   /** 右上角王牌庫 chip。 */
   bossDeckInfo?: BossDeckHoverInfo | null;
+  /** 隊友傷王時問騎士要不要嘲諷。 */
+  tauntPrompt?: {
+    knightHex: Axial;
+    onAccept: () => void;
+    onDecline: () => void;
+  } | null;
 };
 
 const HEX_SIZE = 28;
@@ -219,6 +241,9 @@ export function BoardCanvas({
   selectedHex,
   hoverPath,
   targetHexes,
+  legalHexes,
+  barrierHexes,
+  rangeWash,
   onHexClick,
   onHexHover,
   showSweetZone = false,
@@ -227,6 +252,7 @@ export function BoardCanvas({
   hexHoverHint,
   mapRadius = DEFAULT_MAP_RADIUS,
   bossDeckInfo,
+  tauntPrompt = null,
 }: BoardCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -273,6 +299,13 @@ export function BoardCanvas({
       const onPath = pi >= 0;
       const isPathStart = onPath && pi === 0;
       const onTarget = isTargetHex(targetHexes, h);
+      const onLegal = isTargetHex(legalHexes, h);
+      const onBarrier = isTargetHex(barrierHexes, h);
+      const onTauntRing =
+        tauntPrompt != null &&
+        neighbors(tauntPrompt.knightHex).some((n) => equals(n, h));
+      const inRange =
+        rangeWash != null && distance(h, rangeWash.center) <= rangeWash.radius;
 
       ctx.beginPath();
       ctx.moveTo(corners[0]![0], corners[0]![1]);
@@ -289,6 +322,22 @@ export function BoardCanvas({
         ctx.fillStyle = unitIn ? SWEET_FILL_UNIT : SWEET_FILL;
         ctx.fill();
       }
+      if (inRange && !inSweet) {
+        ctx.fillStyle = RANGE_FILL;
+        ctx.fill();
+      }
+      if (onBarrier) {
+        ctx.fillStyle = BARRIER_FILL;
+        ctx.fill();
+      }
+      if (onTauntRing) {
+        ctx.fillStyle = TAUNT_FILL;
+        ctx.fill();
+      }
+      if (onLegal && !onPath && !onTarget) {
+        ctx.fillStyle = LEGAL_FILL;
+        ctx.fill();
+      }
       if (onTarget) {
         ctx.fillStyle = TARGET_FILL;
         ctx.fill();
@@ -300,6 +349,12 @@ export function BoardCanvas({
       if (onTarget && !onPath) {
         ctx.strokeStyle = TARGET_STROKE;
         ctx.lineWidth = 2.5;
+      } else if (onTauntRing && !onPath) {
+        ctx.strokeStyle = TAUNT_STROKE;
+        ctx.lineWidth = 2;
+      } else if (onBarrier && !onPath) {
+        ctx.strokeStyle = BARRIER_STROKE;
+        ctx.lineWidth = 2;
       } else if (onPath) {
         ctx.strokeStyle = PATH_STROKE;
         ctx.lineWidth = 2.5;
@@ -400,8 +455,12 @@ export function BoardCanvas({
     hexes,
     hoverPath,
     layout,
+    legalHexes,
+    barrierHexes,
+    rangeWash,
     showSweetZone,
     targetHexes,
+    tauntPrompt,
   ]);
 
   function eventToHex(e: MouseEvent<HTMLCanvasElement>): Axial | null {
@@ -440,7 +499,7 @@ export function BoardCanvas({
 
   return (
     <section className="board-panel" aria-label="六角棋盤">
-      <h2>開場棋盤（Canvas）</h2>
+      <h2>棋盤</h2>
       {bossDeckInfo ? (
         <div className="boss-deck-chip" title="">
           <span className="boss-deck-chip-label">王牌庫</span>
@@ -485,17 +544,53 @@ export function BoardCanvas({
           {hexHoverHint}
         </p>
       ) : null}
-      <canvas
-        ref={canvasRef}
-        className="board-canvas"
-        width={layout.width}
-        height={layout.height}
-        onClick={handleClick}
-        onMouseMove={handleMove}
-        onMouseLeave={handleLeave}
-        role="img"
-        aria-label={`六角地圖半徑 ${mapRadius}`}
-      />
+      <div className="board-canvas-wrap">
+        <canvas
+          ref={canvasRef}
+          className="board-canvas"
+          width={layout.width}
+          height={layout.height}
+          onClick={tauntPrompt ? undefined : handleClick}
+          onMouseMove={handleMove}
+          onMouseLeave={handleLeave}
+          role="img"
+          aria-label={`六角地圖半徑 ${mapRadius}`}
+        />
+        {tauntPrompt
+          ? (() => {
+              const { x, y } = axialToPixel(tauntPrompt.knightHex, HEX_SIZE);
+              const leftPct =
+                ((layout.originX + x) / layout.width) * 100;
+              const topPct =
+                ((layout.originY + y - HEX_SIZE * 0.55) / layout.height) * 100;
+              return (
+                <div
+                  className="taunt-popup"
+                  style={{ left: `${leftPct}%`, top: `${topPct}%` }}
+                  role="dialog"
+                  aria-label="是否使用嘲諷"
+                >
+                  <button
+                    type="button"
+                    className="taunt-popup-yes"
+                    onClick={tauntPrompt.onAccept}
+                  >
+                    嘲諷
+                  </button>
+                  <button
+                    type="button"
+                    className="taunt-popup-no"
+                    onClick={tauntPrompt.onDecline}
+                    aria-label="這次不用"
+                    title="這次不用"
+                  >
+                    ×
+                  </button>
+                </div>
+              );
+            })()
+          : null}
+      </div>
       <div className="board-footer">
         {onReset ? (
           <button type="button" className="board-reset" onClick={onReset}>

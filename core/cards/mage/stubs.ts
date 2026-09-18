@@ -11,7 +11,8 @@ import type { MageCardId, MageCardInstance } from './types.js';
  * - 御風：計次、受沉默
  * - 位面：不計次、受沉默（增幅後不受 → 結算旗標覆蓋）
  * - 魔法箭：計次、受沉默
- * - 增幅／聚精：不計次；屏障：計次（UNRESOLVED 預設）
+ * - 增幅：不計次、不受沉默；聚精：不計次；屏障：計次（UNRESOLVED 預設）
+ * - 位面：計次、受沉默（增幅後該張不受，距離 +1）
  */
 export const MAGE_CARD_DEFS: Record<MageCardId, CardDefinition> = {
   magic_arrow: {
@@ -25,7 +26,7 @@ export const MAGE_CARD_DEFS: Record<MageCardId, CardDefinition> = {
     id: 'amplify',
     name: '強能增幅',
     countsTowardAction: false,
-    silenced: true,
+    silenced: false,
     kind: ['utility', 'buff'],
   },
   wind: {
@@ -53,7 +54,7 @@ export const MAGE_CARD_DEFS: Record<MageCardId, CardDefinition> = {
   planar_swap: {
     id: 'planar_swap',
     name: '位面調換',
-    countsTowardAction: false,
+    countsTowardAction: true,
     /** 定義預設受沉默；增幅後由 resolvePlanarSwap.silenced=false 覆蓋。 */
     silenced: true,
     kind: ['ultimate', 'utility'],

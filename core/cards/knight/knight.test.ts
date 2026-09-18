@@ -78,7 +78,7 @@ describe('knight attack crack / destroy walls', () => {
     expect(r.ok).toBe(true);
     expect(r.bossDamage).toBe(0);
     expect(getTile(r.board, wall)?.kind).toBe('plain_broken');
-    expect(r.events).toEqual([]);
+    expect(r.events).toEqual([{ type: 'TerrainCracked', hex: wall }]);
   });
 
   it('second hit destroys aged plain_broken → boss 1 dmg', () => {
@@ -202,11 +202,11 @@ describe('英勇衝鋒 pierce aged walls', () => {
     expect(r.events.filter((e) => e.type === 'DrawRequested')).toHaveLength(1);
   });
 
-  it('wall damage caps at 2 even with three aged walls', () => {
+  it('wall damage caps at 2 even with three aged broken walls', () => {
     let board = createEmptyBoard();
     const start: Axial = { q: 0, r: 1 };
-    // charge +q along r=1: (1,1)(2,1)(3,1)
-    board = placeTerrain(board, { q: 1, r: 1 }, 'plain', { aged: true });
+    // charge +q along r=1: (1,1)(2,1)(3,1) all broken so they pierce
+    board = placeTerrain(board, { q: 1, r: 1 }, 'plain_broken', { aged: true });
     board = placeTerrain(board, { q: 2, r: 1 }, 'plain_broken', { aged: true });
     board = placeTerrain(board, { q: 3, r: 1 }, 'plain_broken', { aged: true });
     const r = resolveHeroicCharge({
@@ -222,6 +222,28 @@ describe('英勇衝鋒 pierce aged walls', () => {
 });
 
 describe('英勇衝鋒 intact wall / unit / empty', () => {
+  it('intact aged wall → stop, crack, no boss dmg (must destroy to damage)', () => {
+    let board = createEmptyBoard();
+    const start: Axial = { q: 3, r: 0 };
+    const wall: Axial = { q: 4, r: 0 };
+    board = placeTerrain(board, wall, 'plain', { aged: true });
+
+    const r = resolveHeroicCharge({
+      board,
+      actorPosition: start,
+      direction: DIR_EQ,
+      bounds: BOUNDS,
+    });
+    expect(r.ok).toBe(true);
+    expect(r.forceEndTurn).toBe(true);
+    expect(r.actorPosition).toEqual(start);
+    expect(getTile(r.board, wall)?.kind).toBe('plain_broken');
+    expect(getTile(r.board, wall)?.aged).toBe(true);
+    expect(r.wallDamage).toBe(0);
+    expect(r.bossDamage).toBe(0);
+    expect(r.bossDraw).toBe(false);
+  });
+
   it('intact unaged wall → stop prev, crack, force end', () => {
     let board = createEmptyBoard();
     const start: Axial = { q: 3, r: 0 };
@@ -409,20 +431,13 @@ describe('嘲諷 resolveTaunt', () => {
 });
 
 describe('堅定信仰 resolveFaith', () => {
-  it('happy：未移動清 1 層詛咒', () => {
-    const r = resolveFaith({ hasMovedThisTurn: false, curseStacks: 2 });
+  it('happy：清 1 層詛咒（已移動也可出）', () => {
+    const r = resolveFaith({ hasMovedThisTurn: true, curseStacks: 2 });
     expect(r.ok).toBe(true);
     expect(r.counted).toBe(true);
     expect(r.cleared).toBe(FAITH_CURSE_CLEAR);
     expect(r.curseStacks).toBe(1);
     expect(r.events).toContainEqual({ type: 'CurseClearedSelf', amount: 1 });
-  });
-
-  it('fail：本回合已移動', () => {
-    const r = resolveFaith({ hasMovedThisTurn: true, curseStacks: 2 });
-    expect(r.ok).toBe(false);
-    expect(r.reason).toBe('already_moved');
-    expect(r.curseStacks).toBe(2);
   });
 
   it('0 層仍可出，cleared=0', () => {

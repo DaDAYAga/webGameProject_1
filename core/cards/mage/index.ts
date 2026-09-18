@@ -39,6 +39,7 @@ export {
 
 export {
   PLANAR_SWAP_MAX_DISTANCE,
+  PLANAR_SWAP_AMPLIFY_RANGE_BONUS,
   resolvePlanarSwap,
   type ResolvePlanarSwapInput,
 } from './planar.js';

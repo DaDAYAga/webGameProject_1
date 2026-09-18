@@ -37,7 +37,9 @@ export type CombatEvent =
       amount: number;
       source: 'melee' | 'ranged' | 'aged_wall_destroy' | 'heroic_charge';
       effective: boolean;
-    };
+    }
+  | { type: 'TerrainCracked'; hex: { q: number; r: number } }
+  | { type: 'TerrainDestroyed'; hex: { q: number; r: number } };
 
 /** 遠程對王參數。 */
 export type ComputeRangedDamageToBossInput = {

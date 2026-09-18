@@ -1,7 +1,8 @@
 /**
  * 騎士「英勇衝鋒」×2：沿軸向直線衝到圖邊或硬停；計次；受沉默。
- * 可連續穿老化牆（落地該格續衝）與未老化破碎；撞完整牆／punish／silence／mud／王／邊緣／單位前一格硬停。
- * 結算後一律 forceEndTurn。見 design-amendments 2026-09-09f。
+ * 破碎牆撞破續衝；完整牆（不論老化）停前一格並打一下（只破碎、不傷王）。
+ * 只有破壞老化牆才傷王。撞 punish／silence／mud／王／邊緣／單位前一格硬停。
+ * 結算後一律 forceEndTurn。見 design-amendments 2026-09-19。
  */
 
 import {
@@ -67,18 +68,9 @@ export type ResolveHeroicChargeInput = {
   landingHex?: Axial;
 };
 
-/** 完整且未老化的 plain／plain_starter → 停前一格並破碎。 */
-function isIntactUnagedWall(tile: Tile): boolean {
-  if (tile.kind === 'plain' || tile.kind === 'plain_starter') {
-    return tile.aged !== true;
-  }
-  return false;
-}
-
-/** 老化可拆牆（含開場預設 aged plain_broken）。 */
-function isAgedCrackableWall(tile: Tile): boolean {
-  if (!kindAllowsCrack(tile.kind)) return false;
-  return tile.aged === true;
+/** 完整牆（plain／plain_starter，不論老化）→ 停前一格並打一下。 */
+function isIntactWall(tile: Tile): boolean {
+  return tile.kind === 'plain' || tile.kind === 'plain_starter';
 }
 
 function findUnitAt(
@@ -179,7 +171,22 @@ export function resolveHeroicCharge(
     }
 
     if (kindAllowsCrack(tile.kind)) {
-      if (isAgedCrackableWall(tile)) {
+      // 完整牆：停下、打一下（破碎）；未破壞所以不傷王
+      if (isIntactWall(tile)) {
+        const hit = applyTerrainHit(board, next);
+        board = hit.board;
+        events.push(...hit.events);
+        events.push({
+          type: 'WallPierce',
+          hex: next,
+          bossDamageApplied: 0,
+        });
+        endReason = 'charge_into_intact_wall';
+        break;
+      }
+
+      // 破碎牆：撞破續衝；破壞且老化才傷王
+      if (tile.kind === 'plain_broken') {
         const destroyed = destroyTile(board, next);
         board = destroyed.board;
         let applied = 0;
@@ -194,28 +201,6 @@ export function resolveHeroicCharge(
         });
         pos = next;
         continue;
-      }
-
-      // 未老化破碎：清格、不傷王、繼續
-      if (tile.kind === 'plain_broken' && tile.aged !== true) {
-        const destroyed = destroyTile(board, next);
-        board = destroyed.board;
-        events.push({
-          type: 'WallPierce',
-          hex: next,
-          bossDamageApplied: 0,
-        });
-        pos = next;
-        continue;
-      }
-
-      // 完整未老化牆：停前一格、打一下
-      if (isIntactUnagedWall(tile)) {
-        const hit = applyTerrainHit(board, next);
-        board = hit.board;
-        events.push(...hit.events);
-        endReason = 'charge_into_fresh_wall';
-        break;
       }
     }
 

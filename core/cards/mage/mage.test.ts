@@ -218,7 +218,7 @@ describe('御風術 resolveWindControl', () => {
 });
 
 describe('位面調換 resolvePlanarSwap', () => {
-  it('兩人皆在距離 ≤3 → 互換成功、endTurn、不計次', () => {
+  it('兩人皆在距離 ≤3 → 互換成功、endTurn、計次', () => {
     const board = createEmptyBoard();
     const mageHex = { q: 2, r: 0 };
     const a: MageActorRef = { id: 'a', hex: { q: 3, r: 0 } };
@@ -227,7 +227,7 @@ describe('位面調換 resolvePlanarSwap', () => {
     const r = resolvePlanarSwap({ board, mageHex, actorA: a, actorB: b });
 
     expect(r.ok).toBe(true);
-    expect(r.counted).toBe(false);
+    expect(r.counted).toBe(true);
     expect(r.endTurn).toBe(true);
     expect(r.silenced).toBe(true);
     expect(r.swappedActorIds).toEqual(['a', 'b']);
@@ -327,8 +327,33 @@ describe('位面調換 resolvePlanarSwap', () => {
     });
     expect(r.ok).toBe(true);
     expect(r.silenced).toBe(false);
-    expect(r.counted).toBe(false);
+    expect(r.counted).toBe(true);
     expect(r.endTurn).toBe(true);
+  });
+
+  it('增幅後距離 4 可換、5 不可', () => {
+    const board = createEmptyBoard();
+    const mageHex = { q: 1, r: 0 };
+    const a: MageActorRef = { id: 'a', hex: mageHex };
+    const far4: MageActorRef = { id: 'b', hex: { q: 5, r: 0 } };
+    const far5: MageActorRef = { id: 'c', hex: { q: 6, r: 0 } };
+    const ok = resolvePlanarSwap({
+      board,
+      mageHex,
+      actorA: a,
+      actorB: far4,
+      amplified: true,
+    });
+    expect(ok.ok).toBe(true);
+    const no = resolvePlanarSwap({
+      board,
+      mageHex,
+      actorA: a,
+      actorB: far5,
+      amplified: true,
+    });
+    expect(no.ok).toBe(false);
+    expect(no.reason).toBe('out_of_range_b');
   });
 
   it('落點不可站 → fail', () => {
@@ -365,11 +390,13 @@ describe('魔法箭 resolveMagicArrow（薄包）', () => {
 });
 
 describe('MAGE_CARD_DEFS / makeMageCard', () => {
-  it('御風計次受沉默；位面不計次受沉默', () => {
+  it('御風計次受沉默；位面計次受沉默；增幅不受沉默', () => {
     expect(MAGE_CARD_DEFS.wind.countsTowardAction).toBe(true);
     expect(MAGE_CARD_DEFS.wind.silenced).toBe(true);
-    expect(MAGE_CARD_DEFS.planar_swap.countsTowardAction).toBe(false);
+    expect(MAGE_CARD_DEFS.planar_swap.countsTowardAction).toBe(true);
     expect(MAGE_CARD_DEFS.planar_swap.silenced).toBe(true);
+    expect(MAGE_CARD_DEFS.amplify.silenced).toBe(false);
+    expect(MAGE_CARD_DEFS.amplify.countsTowardAction).toBe(false);
     const c = makeMageCard('wind', 'w1');
     expect(c.countsTowardAction).toBe(true);
     expect(c.cardId).toBe('wind');
