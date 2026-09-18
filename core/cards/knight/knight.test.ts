@@ -467,11 +467,11 @@ describe('奉獻 resolveDevotion', () => {
     const r = resolveDevotion({
       actorHex: { q: 2, r: 0 },
       allyHex: { q: 3, r: 0 },
-      selfCurseStacks: 1,
+      selfCurseStacks: 2,
       allyCurseStacks: 1,
     });
     expect(r.ok).toBe(true);
-    expect(r.selfCurseStacks).toBe(2);
+    expect(r.selfCurseStacks).toBe(3);
     expect(r.extractedUndying).toBe(true);
     expect(r.wouldKillSelf).toBe(false);
     expect(r.events.some((e) => e.type === 'UndyingExtracted')).toBe(false);

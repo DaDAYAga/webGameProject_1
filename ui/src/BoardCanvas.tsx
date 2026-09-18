@@ -50,8 +50,13 @@ const SWEET_FILL_UNIT = 'rgba(255, 176, 46, 0.48)';
 const FLOOR_FILL = '#1e2430';
 /** 任意已老化 plain 系（開場牆／王鋪後老化）共用。 */
 const AGED_PLAIN_FILL = '#5a6b80';
-/** 未老化 plain 系「一般格」。 */
+/** 未老化完整一般格。 */
 const UNAGED_PLAIN_FILL = '#8a9bb0';
+/** 未老化破碎格（須與完整一般格分明）。 */
+const BROKEN_PLAIN_FILL = '#4e5866';
+/** 詛咒地形：單一飽和紫，避免被可走洗成兩色。 */
+const CURSE_FILL = '#7a45c2';
+const CURSE_STROKE = '#c9a0ff';
 
 export type BoardActorView = {
   id: string;
@@ -69,6 +74,10 @@ export type BoardActorView = {
   eliminated?: boolean;
   /** 鄰沉默：棋子旁小「默」標（有別於咒／封）。 */
   adjacentSilence?: boolean;
+  /** 槍手裝填短標（有氣瓶才畫）。 */
+  ammoHint?: string | null;
+  /** 法師增幅待用。 */
+  amplifiedPending?: boolean;
 };
 
 /** 王牌庫懸停摘要（由 App 組好）。 */
@@ -173,11 +182,14 @@ function fillForHex(hex: Axial, board: Board): string {
 }
 
 function fillForTile(tile: Tile): string {
+  if (tile.kind === 'plain_broken') {
+    return tile.aged === true ? AGED_PLAIN_FILL : BROKEN_PLAIN_FILL;
+  }
   if (isPlainFamily(tile.kind)) {
     return tile.aged === true ? AGED_PLAIN_FILL : UNAGED_PLAIN_FILL;
   }
   if (tile.kind === 'punish') return '#6b3a5a';
-  if (tile.kind === 'curse') return '#4a3a6b';
+  if (tile.kind === 'curse') return CURSE_FILL;
   if (tile.kind === 'silence') return '#f5f5f5';
   if (tile.kind === 'mud') return '#6b4a2a';
   return '#2a3140';
@@ -193,6 +205,8 @@ function strokeForHex(
   if (equals(hex, BOSS_HEX)) return '#e8a0a0';
   const tile = getTile(board, hex);
   if (tile?.kind === 'silence') return '#222222';
+  if (tile?.kind === 'curse') return CURSE_STROKE;
+  if (tile?.kind === 'plain_broken') return '#c4b090';
   return '#3d4658';
 }
 
@@ -207,6 +221,9 @@ function labelForHex(hex: Axial, board: Board): string {
   if (tile.kind === 'curse') return '詛咒';
   if (tile.kind === 'punish') return '懲罰';
   if (tile.kind === 'mud') return '泥濘';
+  if (tile.kind === 'plain_broken') {
+    return tile.aged === true ? '老化碎' : '破碎';
+  }
   if (isPlainFamily(tile.kind)) {
     return tile.aged === true ? '老化' : '一般';
   }
@@ -220,6 +237,8 @@ function labelFill(
   onTarget: boolean,
 ): string {
   if (label === '沉默') return '#111111';
+  if (label === '詛咒') return '#f0e6ff';
+  if (label === '破碎' || label === '老化碎') return '#f0e0c0';
   if (onTarget) return '#2a0810';
   if (onPath && !isPathStart) return '#0a1a08';
   return '#e8eaef';
@@ -228,6 +247,41 @@ function labelFill(
 function pathIndex(path: Axial[] | null | undefined, hex: Axial): number {
   if (!path || path.length === 0) return -1;
   return path.findIndex((h) => equals(h, hex));
+}
+
+function isSpecialTerrain(kind: Tile['kind'] | undefined): boolean {
+  return (
+    kind === 'curse' ||
+    kind === 'silence' ||
+    kind === 'punish' ||
+    kind === 'mud'
+  );
+}
+
+function drawBrokenHatch(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  size: number,
+) {
+  ctx.save();
+  ctx.strokeStyle = 'rgba(232, 214, 170, 0.85)';
+  ctx.lineWidth = 1.5;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(cx - size * 0.38, cy - size * 0.08);
+  ctx.lineTo(cx - size * 0.04, cy + size * 0.06);
+  ctx.lineTo(cx + size * 0.34, cy - size * 0.28);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(cx - size * 0.18, cy + size * 0.3);
+  ctx.lineTo(cx + size * 0.2, cy - size * 0.02);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(cx + size * 0.08, cy + size * 0.22);
+  ctx.lineTo(cx + size * 0.32, cy + size * 0.08);
+  ctx.stroke();
+  ctx.restore();
 }
 
 function isTargetHex(targets: Axial[] | null | undefined, hex: Axial): boolean {
@@ -334,7 +388,8 @@ export function BoardCanvas({
         ctx.fillStyle = TAUNT_FILL;
         ctx.fill();
       }
-      if (onLegal && !onPath && !onTarget) {
+      const tile = getTile(board, h);
+      if (onLegal && !onPath && !onTarget && !isSpecialTerrain(tile?.kind)) {
         ctx.fillStyle = LEGAL_FILL;
         ctx.fill();
       }
@@ -364,6 +419,9 @@ export function BoardCanvas({
         ctx.lineWidth = equals(h, BOSS_HEX) || isActor ? 2 : 1;
       }
       ctx.stroke();
+      if (tile?.kind === 'plain_broken') {
+        drawBrokenHatch(ctx, cx, cy, HEX_SIZE - 1);
+      }
 
       const label = labelForHex(h, board);
       if (label) {
@@ -430,22 +488,30 @@ export function BoardCanvas({
       ctx.textBaseline = 'middle';
       ctx.fillText(actor.label, cx, cy);
       const badges: string[] = [];
-      if ((actor.curseStacks ?? 0) >= 1) badges.push('咒');
+      if ((actor.curseStacks ?? 0) >= 1) badges.push(`咒${actor.curseStacks}`);
       if (actor.adjacentSilence) badges.push('默');
       if (actor.sealed) badges.push('封');
+      if (actor.amplifiedPending) badges.push('增幅');
       if (actor.eliminated) badges.push('出局');
       if (badges.length > 0) {
         ctx.font = 'bold 9px "Segoe UI", "Noto Sans TC", sans-serif';
         ctx.fillStyle = actor.eliminated
           ? '#c0c0c0'
-          : badges.includes('封') && !badges.includes('咒')
-            ? '#e8b84a'
-            : badges.includes('咒')
+          : actor.amplifiedPending
+            ? '#c4a0ff'
+            : badges.some((b) => b.startsWith('咒'))
               ? '#d4a0ff'
-              : badges.includes('默')
-                ? '#d8dce8'
-                : '#e8b84a';
+              : badges.includes('封')
+                ? '#e8b84a'
+                : badges.includes('默')
+                  ? '#d8dce8'
+                  : '#e8b84a';
         ctx.fillText(badges.join(''), cx, cy + HEX_SIZE * 0.42);
+      }
+      if (actor.ammoHint) {
+        ctx.font = 'bold 8px "Segoe UI", "Noto Sans TC", sans-serif';
+        ctx.fillStyle = '#7ec4e8';
+        ctx.fillText(actor.ammoHint, cx, cy + HEX_SIZE * 0.62);
       }
     }
   }, [

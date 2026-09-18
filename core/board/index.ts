@@ -7,6 +7,7 @@ export type { TerrainKind, Tile, Board, TerrainHitResult } from './types.js';
 export type { OpeningBoardOptions, CanStandAtOptions } from './board.js';
 export {
   BASIC_MOVE_BASE,
+  CURSE_CARRY_BASE,
   curseCarryCap,
   isAdjacentToSilence,
   isAdjacentToMud,

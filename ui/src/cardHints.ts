@@ -13,7 +13,7 @@ export const CARD_SIDE_HINTS: Record<string, string> = {
   wind: '推一格',
   focus: '抽牌後結束',
   barrier: '擋住王鋪牆',
-  planar_swap: '跟隊友換位子',
+  planar_swap: '選兩人換位子',
   attack: '近戰一般攻擊',
   faith: '清咒',
   heroic_charge: '直線衝刺，撞碎牆或王後結束回合',
@@ -113,8 +113,8 @@ export const CARD_RICH_TOOLTIPS: Record<string, CardRichTooltip> = {
     title: '位面調換',
     countsLabel: '計次',
     silenceLabel: '受沉默',
-    sideEffects: '與距離 <=３ 的一名友軍換位（不可換自己）。雙方本回合不受沉默／封印。強制結束回合。受增幅時此卡不受沉默／封印，且距離 +1。',
-    how: '先點牌再點友軍。',
+    sideEffects: '選距離 <=３ 的兩名角色互換（可含自己，也可換另外兩人）。雙方本回合不受沉默／封印。強制結束回合。受增幅時此卡不受沉默／封印，且距離 +1。',
+    how: '點牌後依序點兩個目標，都選完才換。點同一人可取消第一目標。',
   },
   attack: {
     title: '攻擊',
@@ -192,8 +192,8 @@ export type ClassPassiveHint = {
 export const CLASS_PASSIVES: Partial<Record<string, ClassPassiveHint>> = {
   knight: {
     title: '詛咒之軀',
-    sideHint: '詛咒上限 2',
-    sideEffects: '詛咒上限 +1。',
+    sideHint: '詛咒上限 3',
+    sideEffects: '詛咒上限 +1（其餘 2 層才咒滿）。',
     how: '',
   },
 };

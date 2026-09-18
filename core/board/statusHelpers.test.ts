@@ -17,10 +17,10 @@ import {
 import type { Axial } from '../hex/index.js';
 
 describe('curseCarryCap / isAdjacentToSilence', () => {
-  it('knight cap 2, others 1', () => {
-    expect(curseCarryCap('knight')).toBe(2);
-    expect(curseCarryCap('gunner')).toBe(1);
-    expect(curseCarryCap('mage')).toBe(1);
+  it('knight cap 3, others 2', () => {
+    expect(curseCarryCap('knight')).toBe(3);
+    expect(curseCarryCap('gunner')).toBe(2);
+    expect(curseCarryCap('mage')).toBe(2);
   });
 
   it('adjacent silence detection', () => {
@@ -63,8 +63,8 @@ describe('absorbCursesAlongPath', () => {
       { q: 3, r: 0 },
       { q: 4, r: 0 },
     ];
-    const r = absorbCursesAlongPath(board, path, 0, 1);
-    expect(r.curseStacks).toBe(1);
+    const r = absorbCursesAlongPath(board, path, 0, 2);
+    expect(r.curseStacks).toBe(2);
     expect(r.absorbedHexes).toHaveLength(2);
     expect(r.board.tiles.has('3,0')).toBe(false);
     expect(r.board.tiles.has('4,0')).toBe(false);
@@ -141,13 +141,14 @@ describe('placeUnagedPlainIfEmpty / curseFullAfterAbsorb', () => {
     expect(getTile(second.board, empty)?.kind).toBe('curse');
   });
 
-  it('curse full: gunner/mage first curse, knight second; no absorb does not elim', () => {
-    expect(curseFullAfterAbsorb('gunner', 1, 1)).toBe(true);
-    expect(curseFullAfterAbsorb('mage', 1, 1)).toBe(true);
-    expect(curseFullAfterAbsorb('knight', 1, 1)).toBe(false);
-    expect(curseFullAfterAbsorb('knight', 2, 1)).toBe(true);
-    expect(curseFullAfterAbsorb('gunner', 1, 0)).toBe(false);
-    expect(curseFullAfterAbsorb('knight', 2, 0)).toBe(false);
+  it('curse full: gunner/mage at 2, knight at 3; no absorb does not trigger', () => {
+    expect(curseFullAfterAbsorb('gunner', 1, 1)).toBe(false);
+    expect(curseFullAfterAbsorb('gunner', 2, 1)).toBe(true);
+    expect(curseFullAfterAbsorb('mage', 2, 1)).toBe(true);
+    expect(curseFullAfterAbsorb('knight', 2, 1)).toBe(false);
+    expect(curseFullAfterAbsorb('knight', 3, 1)).toBe(true);
+    expect(curseFullAfterAbsorb('gunner', 2, 0)).toBe(false);
+    expect(curseFullAfterAbsorb('knight', 3, 0)).toBe(false);
   });
 });
 

@@ -8,9 +8,12 @@ import type { Board } from './types.js';
 /** 基礎移動預設上限（與試玩 TURN_MOVES_PER_ROUND 對齊）。 */
 export const BASIC_MOVE_BASE = 2;
 
-/** 騎士被動「多踩一格」：攜帶上限 2；其餘職業 1。 */
+/** 一般職業咒滿層數：踩到 2 層才鋪鄰封印並清身上詛咒。 */
+export const CURSE_CARRY_BASE = 2;
+
+/** 騎士被動「詛咒之軀」：上限 = 基礎 +1。 */
 export function curseCarryCap(classId: string): number {
-  return classId === 'knight' ? 2 : 1;
+  return classId === 'knight' ? CURSE_CARRY_BASE + 1 : CURSE_CARRY_BASE;
 }
 
 /** 是否鄰 1 有 silence 地形（出牌層擋 silenced 牌）。 */

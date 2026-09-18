@@ -2,7 +2,7 @@
  * 學習筆記（三職業平衡試玩／2026-09-14f）：
  * 1) 必須經重製開局（initial phase=reset-setup）；牌庫預設 14（5 基礎＋4 小技×2＋1 大招）。
  * 2) 封印留下：六鄰滿只封印不壓出局；解一鄰即解封；新封印抽掉最小王牌（2→3→4）。
- * 3) 咒滿不離場：周圍空鄰鋪未老化一般→再算封印（槍／法 1、騎 2）。
+ * 3) 咒滿不離場：槍／法 2 層、騎 3 層才鋪鄰封印並清身上咒。
  *    奉獻咒滿另從牌庫 tutor 不死存在（沒有則日誌「牌庫沒有不死存在」）。
  * 4) 不死存在：封印中可出，落點無周圍特效。狂妄氣瓶＝pushBonus。
  * 5) 越打越擠是主軸；r=5／78 袋為刻意。難度可疊加；灰項只留代價移動，置底不實作。
@@ -435,7 +435,7 @@ type PendingPlay =
       bossDamage: number;
       endTurnAfter?: boolean;
     }
-  | { kind: 'planar_swap'; card: HandCard };
+  | { kind: 'planar_swap'; card: HandCard; firstId?: ClassId };
 
 type PendingBossPlace = {
   liveBoard: Board;
@@ -478,6 +478,15 @@ function classLabel(id: ClassId): string {
 function pieceLabel(id: ClassId): string {
   // 全名優先；兩字皆可塞進棋子
   return classLabel(id);
+}
+
+function formatAmmo(ammo: {
+  damageBonus: number;
+  drawBonus: number;
+  pushBonus: number;
+}): string | null {
+  if (ammo.damageBonus + ammo.drawBonus + ammo.pushBonus <= 0) return null;
+  return `傷${ammo.damageBonus}抽${ammo.drawBonus}推${ammo.pushBonus}`;
 }
 
 function enrichCard(
@@ -730,7 +739,11 @@ function pendingHint(p: PendingPlay | null): string {
   if (p.kind === 'arrogant_push') {
     return `狂妄推牆：再點 ${p.remaining} 個鄰格（徑向推 1；推完王才鋪）`;
   }
-  if (p.kind === 'planar_swap') return '指定換位友軍（點範圍內棋子）';
+  if (p.kind === 'planar_swap') {
+    return p.firstId
+      ? `再點第二個目標（已選 ${classLabel(p.firstId)}；點同一人可取消）`
+      : '點範圍內第一個角色（含自己；兩人都選完才換）';
+  }
   return '';
 }
 
@@ -775,6 +788,19 @@ function devotionHoverText(
 }
 
 /** 騎士攻擊可選鄰 1：王或可拆牆。不可選其他職業。 */
+function listPlanarActorIds(
+  actors: Actors,
+  mageHex: Axial,
+  maxDist: number,
+  excludeId?: ClassId,
+): ClassId[] {
+  return CLASS_ORDER.filter((id) => {
+    if (actors[id].eliminated) return false;
+    if (excludeId && id === excludeId) return false;
+    return distance(mageHex, actors[id].hex) <= maxDist;
+  });
+}
+
 function occupantAt(actors: Actors, hex: Axial, self?: ClassId): ClassId | null {
   for (const id of CLASS_ORDER) {
     if (self && id === self) continue;
@@ -944,12 +970,20 @@ function pathOptsFor(
   };
 }
 
+/** 已封印且沒有不死存在 → 不可移動／出牌，本輪應跳過。 */
+function sealedSkipsTurn(a: ClassActor): boolean {
+  if (!a.sealed || a.sealImmuneThisRound) return false;
+  return !a.hand.some((c) => c.cardId === 'undying');
+}
+
 function nextActionableId(from: ClassId, snap: Actors): ClassId | null {
   const start = CLASS_ORDER.indexOf(from);
   for (let i = 1; i <= CLASS_ORDER.length; i++) {
     const id = CLASS_ORDER[(start + i) % CLASS_ORDER.length]!;
     const a = snap[id];
-    if (!a.eliminated && !a.endedThisRound) return id;
+    if (a.eliminated || a.endedThisRound) continue;
+    if (sealedSkipsTurn(a)) continue;
+    return id;
   }
   return null;
 }
@@ -962,7 +996,14 @@ function knightCanOfferTaunt(snap: Actors): boolean {
 }
 
 function firstActionableId(snap: Actors): ClassId | null {
-  return CLASS_ORDER.find((id) => !snap[id].eliminated && !snap[id].endedThisRound) ?? null;
+  return (
+    CLASS_ORDER.find(
+      (id) =>
+        !snap[id].eliminated &&
+        !snap[id].endedThisRound &&
+        !sealedSkipsTurn(snap[id]),
+    ) ?? null
+  );
 }
 
 function planarRange(amplified: boolean): number {
@@ -1187,11 +1228,11 @@ export function App() {
     }
     if (pendingPlay.kind === 'planar_swap') {
       const maxDist = planarRange(me.amplifiedPending);
-      return CLASS_ORDER.filter(
-        (id) =>
-          id !== selected &&
-          !actors[id].eliminated &&
-          distance(unitHex, actors[id].hex) <= maxDist,
+      return listPlanarActorIds(
+        actors,
+        unitHex,
+        maxDist,
+        pendingPlay.firstId,
       ).map((id) => actors[id].hex);
     }
     if (pendingPlay.kind === 'heroic_charge') {
@@ -1388,6 +1429,8 @@ export function App() {
       sealed: a.sealed,
       eliminated: false,
       adjacentSilence: isAdjacentToSilence(board, a.hex),
+      ammoHint: id === 'gunner' ? formatAmmo(a.ammo) : null,
+      amplifiedPending: id === 'mage' ? a.amplifiedPending : false,
     };
   });
 
@@ -1425,7 +1468,20 @@ export function App() {
         sealedLogs.push(`【解封】${classLabel(id)} 鄰有空 → 解封`);
       }
       if (sealed !== a.sealed) {
-        next[id] = { ...a, sealed };
+        let patched: ClassActor = { ...a, sealed };
+        if (sealed && sealedSkipsTurn(patched)) {
+          patched = {
+            ...patched,
+            endedThisRound: true,
+            movesLeft: 0,
+            actionsLeft: 0,
+            moveLocked: false,
+          };
+          sealedLogs.push(
+            `【封印】${classLabel(id)} 無法行動（本輪結束）`,
+          );
+        }
+        next[id] = patched;
       }
     }
 
@@ -1509,14 +1565,17 @@ export function App() {
     const filled = fillNeighborsWithPlain(boardNow, a.hex, occupied);
     const ageKeys = filled.placed.map((h) => hexKey(h));
     pushLog(
-      `【咒滿】${classLabel(id)} → 周圍鋪一般×${filled.placed.length} → 封印`,
+      `【咒滿】${classLabel(id)} → 周圍鋪一般×${filled.placed.length} → 封印（身上詛咒清除）`,
     );
     setToast(
       `${classLabel(id)} 咒滿：周圍鋪一般×${filled.placed.length}`,
     );
     return {
       board: filled.board,
-      actors: actorsSnap,
+      actors: {
+        ...actorsSnap,
+        [id]: { ...a, curseStacks: 0 },
+      },
       ageKeys,
     };
   }
@@ -1913,6 +1972,15 @@ export function App() {
         bigShowAwaitingShot: false,
         // ammo / deck / curseStacks 保留
       };
+      if (sealedSkipsTurn(a)) {
+        a = {
+          ...a,
+          endedThisRound: true,
+          movesLeft: 0,
+          actionsLeft: 0,
+        };
+        logs.push(`【封印】${classLabel(id)} 本輪跳過`);
+      }
       const pulled = drawFromDeck(id, a, 1);
       a = pulled.actor;
       if (pulled.short) {
@@ -1996,7 +2064,8 @@ export function App() {
       if (actor.actionsLeft > 0) return true;
       return c.cardId === 'shot' && actor.mayPlayShotIgnoreRange;
     });
-    const canStillAct = stillMoves || hasCountedPlayable;
+    const canStillAct =
+      !sealedSkipsTurn(actor) && (stillMoves || hasCountedPlayable);
 
     if (!opts?.force && canStillAct && endConfirmFor !== id) {
       setEndConfirmFor(id);
@@ -2858,28 +2927,50 @@ export function App() {
         return;
       }
       if (pendingPlay.kind === 'planar_swap') {
-        completePlanarSwap(hex, pendingPlay.card);
+        completePlanarSwap(hex, pendingPlay);
         return;
       }
     }
     tryMoveTo(hex);
   }
 
-  function completePlanarSwap(hex: Axial, card: HandCard) {
-    const meNow = actorsRef.current[selected];
+  function completePlanarSwap(
+    hex: Axial,
+    pending: Extract<PendingPlay, { kind: 'planar_swap' }>,
+  ) {
+    const snap = actorsRef.current;
+    const meNow = snap[selected];
     const usedAmp = meNow.amplifiedPending;
     const maxDist = planarRange(usedAmp);
-    const targetId = occupantAt(actorsRef.current, hex, selected);
-    if (!targetId) {
-      pushLog('【位面調換】請點範圍內友軍');
-      setToast('請點範圍內友軍（不可點自己）');
+    const hitId = occupantAt(snap, hex);
+    if (!hitId) {
+      pushLog('【位面調換】請點範圍內角色');
+      setToast('請點範圍內角色');
       return;
     }
+    if (distance(meNow.hex, snap[hitId].hex) > maxDist) {
+      setToast(`超出距離（≤${maxDist}）`);
+      return;
+    }
+    if (!pending.firstId) {
+      setPendingPlay({ kind: 'planar_swap', card: pending.card, firstId: hitId });
+      pushLog(`【位面調換】第一目標 ${classLabel(hitId)}，再點第二人`);
+      setToast(`已選 ${classLabel(hitId)}，再點第二個目標`);
+      return;
+    }
+    if (pending.firstId === hitId) {
+      setPendingPlay({ kind: 'planar_swap', card: pending.card });
+      pushLog('【位面調換】取消第一目標');
+      setToast('已取消，請重選第一個目標');
+      return;
+    }
+    const a = snap[pending.firstId];
+    const b = snap[hitId];
     const result = resolvePlanarSwap({
       board,
       mageHex: meNow.hex,
-      actorA: { id: selected, hex: meNow.hex },
-      actorB: { id: targetId, hex: actorsRef.current[targetId].hex },
+      actorA: { id: pending.firstId, hex: a.hex, sealed: a.sealed },
+      actorB: { id: hitId, hex: b.hex, sealed: b.sealed },
       amplified: usedAmp,
     });
     if (!result.ok) {
@@ -2888,7 +2979,7 @@ export function App() {
       return;
     }
     const pos = result.positions;
-    let nextActors: Actors = { ...actorsRef.current };
+    let nextActors: Actors = { ...snap };
     for (const id of result.swappedActorIds) {
       const cid = id as ClassId;
       if (!(cid in nextActors)) continue;
@@ -2903,7 +2994,9 @@ export function App() {
     const counts = lookupCountsTowardAction(selected, 'planar_swap');
     nextActors[selected] = withPlayFlags(nextActors[selected], {
       amplifiedPending: false,
-      hand: nextActors[selected].hand.filter((c) => c.instanceId !== card.instanceId),
+      hand: nextActors[selected].hand.filter(
+        (c) => c.instanceId !== pending.card.instanceId,
+      ),
       actionsLeft: counts
         ? Math.max(0, nextActors[selected].actionsLeft - 1)
         : nextActors[selected].actionsLeft,
@@ -2911,7 +3004,7 @@ export function App() {
     setPendingPlay(null);
     const synced = applyBoardAndEnclosure(board, nextActors);
     pushLog(
-      `【位面調換】${classLabel(selected)}↔${classLabel(targetId)}` +
+      `【位面調換】${classLabel(pending.firstId)}↔${classLabel(hitId)}` +
         (usedAmp ? `（增幅距離 ${maxDist}）` : ''),
     );
     pushLog('【位面調換】換位後雙方本回合不受沉默／封印');
@@ -3319,7 +3412,9 @@ export function App() {
         patchActor(selected, { amplifiedPending: false });
         return;
       }
-      setBarrierAura(result.aura ?? null);
+      const aura = result.aura ?? null;
+      barrierAuraRef.current = aura;
+      setBarrierAura(aura);
       const afterBar = withPlayFlags(meNow, {
         amplifiedPending: false,
         barrierCooldownPending: true,
@@ -3344,9 +3439,16 @@ export function App() {
     }
 
     if (card.cardId === 'planar_swap') {
+      const maxDist = planarRange(meNow.amplifiedPending);
+      const ids = listPlanarActorIds(actorsRef.current, meNow.hex, maxDist);
+      if (ids.length < 2) {
+        pushLog('【位面調換】失敗：範圍內不足兩人');
+        setToast('位面失敗：範圍內不足兩人');
+        return;
+      }
       setPendingPlay({ kind: 'planar_swap', card });
-      pushLog('【位面調換】請點範圍內友軍換位（不可點自己）');
-      setToast('位面：點範圍內友軍');
+      pushLog('【位面調換】請點兩個範圍內角色（含自己；兩人都選完才換）');
+      setToast('位面：先點第一人，再點第二人');
       return;
     }
 
@@ -3625,6 +3727,12 @@ export function App() {
                     <span>默</span>
                   ) : null}
                   {a.sealImmuneThisRound ? <span>封免</span> : null}
+                  {id === 'gunner' && formatAmmo(a.ammo) ? (
+                    <span className="class-card-ammo">{formatAmmo(a.ammo)}</span>
+                  ) : null}
+                  {id === 'mage' && a.amplifiedPending ? (
+                    <span className="class-card-amp">增幅</span>
+                  ) : null}
                 </span>
               </button>
               <ClassPassiveChip classId={id} />

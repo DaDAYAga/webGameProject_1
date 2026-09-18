@@ -176,6 +176,14 @@ header h1 {
   color: #c9b48a;
 }
 
+.class-card-ammo {
+  color: #7ec4e8;
+}
+
+.class-card-amp {
+  color: #c4a0ff;
+}
+
 .class-card.is-selected {
   border-color: var(--class-accent, #5ad67a);
   box-shadow:
