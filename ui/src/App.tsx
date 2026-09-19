@@ -1396,6 +1396,11 @@ export function App() {
     return merged.length > 0 ? merged : null;
   }, [barrierAura, cardPreview.barrier]);
 
+  const pickedHexes =
+    pendingPlay?.kind === 'planar_swap' && pendingPlay.firstId
+      ? [actors[pendingPlay.firstId].hex]
+      : null;
+
   const planarHoverRange =
     hoveredCard?.cardId === 'planar_swap' && phase === 'playing'
       ? planarRange(me.amplifiedPending)
@@ -3554,6 +3559,7 @@ export function App() {
           }
           hoverPath={hoverPath}
           targetHexes={targetHexes}
+          pickedHexes={pickedHexes}
           legalHexes={legalHexes}
           barrierHexes={barrierHexes}
           rangeWash={

@@ -3,7 +3,7 @@
  * 1) 規則在 core；畫面只做 axial→像素、三棋子色、地形統一標籤；半徑由 props 傳入。
  * 2) 老化牆：凡 plain 系且 aged:true → 同一填色＋「老化」（開場牆＝王鋪老化後同貌）。
  * 3) 未老化 plain 系 → 「一般格」＋較亮填色；空地板 #1e2430。
- * 4) hoverPath 螢光綠；攻擊目標珊瑚紅；甜區琥珀；Canvas 數學當黑盒。
+ * 4) hoverPath 螢光綠；攻擊目標珊瑚紅；已選第一目標青綠；甜區琥珀；Canvas 數學當黑盒。
  * 5) 右上角王牌庫 chip：懸停看剩餘張數／N 分布／地形袋。
  */
 import { useEffect, useMemo, useRef, type MouseEvent } from 'react';
@@ -41,6 +41,9 @@ const TAUNT_STROKE = '#e8b84a';
 /** 攻擊／指定目標：珊瑚紅（與路徑綠區隔）。 */
 const TARGET_FILL = 'rgba(255, 72, 110, 0.42)';
 const TARGET_STROKE = '#ff8aa8';
+/** 位面等：已點的第一目標（與第二目標珊瑚紅區隔）。 */
+const PICKED_FILL = 'rgba(40, 210, 190, 0.48)';
+const PICKED_STROKE = '#5eefd8';
 
 /** 遠程甜區琥珀洗。 */
 const SWEET_FILL = 'rgba(255, 176, 46, 0.32)';
@@ -106,6 +109,8 @@ type BoardCanvasProps = {
   hoverPath?: Axial[] | null;
   /** 騎士攻擊等指定目標高亮（有別於走路路徑）。 */
   targetHexes?: Axial[] | null;
+  /** 位面等：已確認的第一目標格（與 targetHexes 珊瑚紅不同色）。 */
+  pickedHexes?: Axial[] | null;
   /** 可走範圍（無 pending 時）。 */
   legalHexes?: Axial[] | null;
   /** 屏障保護／禁鋪格。 */
@@ -295,6 +300,7 @@ export function BoardCanvas({
   selectedHex,
   hoverPath,
   targetHexes,
+  pickedHexes,
   legalHexes,
   barrierHexes,
   rangeWash,
@@ -353,6 +359,7 @@ export function BoardCanvas({
       const onPath = pi >= 0;
       const isPathStart = onPath && pi === 0;
       const onTarget = isTargetHex(targetHexes, h);
+      const onPicked = isTargetHex(pickedHexes, h);
       const onLegal = isTargetHex(legalHexes, h);
       const onBarrier = isTargetHex(barrierHexes, h);
       const onTauntRing =
@@ -397,11 +404,18 @@ export function BoardCanvas({
         ctx.fillStyle = TARGET_FILL;
         ctx.fill();
       }
+      if (onPicked) {
+        ctx.fillStyle = PICKED_FILL;
+        ctx.fill();
+      }
       if (onPath) {
         ctx.fillStyle = isPathStart ? PATH_START_FILL : PATH_FILL;
         ctx.fill();
       }
-      if (onTarget && !onPath) {
+      if (onPicked && !onPath) {
+        ctx.strokeStyle = PICKED_STROKE;
+        ctx.lineWidth = 2.75;
+      } else if (onTarget && !onPath) {
         ctx.strokeStyle = TARGET_STROKE;
         ctx.lineWidth = 2.5;
       } else if (onTauntRing && !onPath) {
@@ -425,7 +439,7 @@ export function BoardCanvas({
 
       const label = labelForHex(h, board);
       if (label) {
-        ctx.fillStyle = labelFill(label, onPath, isPathStart, onTarget);
+        ctx.fillStyle = labelFill(label, onPath, isPathStart, onTarget || onPicked);
         ctx.font =
           label.length >= 2
             ? '10px "Segoe UI", "Noto Sans TC", sans-serif'
@@ -526,6 +540,7 @@ export function BoardCanvas({
     rangeWash,
     showSweetZone,
     targetHexes,
+    pickedHexes,
     tauntPrompt,
   ]);
 
